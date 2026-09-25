@@ -1,0 +1,11 @@
+node_modules/
+data/
+vendor/piper/
+vendor/voices/
+vendor/sttenv/
+
+*.log
+.DS_Store
+
+__pycache__/
+*.pyc

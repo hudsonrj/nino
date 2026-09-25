@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; media-src 'self' blob:; font-src 'self';" />
+<title>Nino</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="stage" class="stage">
+
+  <!-- ============================ PAINEL ============================ -->
+  <section id="panel" class="panel" aria-hidden="true">
+
+    <header class="panel-head">
+      <div class="brand">
+        <span class="dot" id="statusDot"></span>
+        <div class="brand-text">
+          <strong>Nino</strong>
+          <span id="statusText">pronto para ajudar</span>
+        </div>
+      </div>
+      <nav class="head-actions">
+        <button id="btnChat" class="icon-btn active" title="Conversa">💬</button>
+        <button id="btnKb" class="icon-btn" title="Base de conhecimento">📚</button>
+        <button id="btnSettings" class="icon-btn" title="Ajustes">⚙️</button>
+        <button id="btnHide" class="icon-btn" title="Esconder">✕</button>
+      </nav>
+    </header>
+
+    <!-- ------------------------- VIEW: CONVERSA ------------------------- -->
+    <div id="viewChat" class="view active">
+      <div id="messages" class="messages"></div>
+
+      <div id="sources" class="sources hidden"></div>
+
+      <form id="composer" class="composer" autocomplete="off">
+        <button type="button" id="btnMic" class="mic-btn" title="Falar (voz)">🎤</button>
+        <textarea id="input" rows="1" placeholder="Pergunte alguma coisa…"></textarea>
+        <button type="submit" id="btnSend" class="send-btn" title="Enviar">➤</button>
+      </form>
+
+      <div class="hint">
+        <span>Enter envia · Shift+Enter quebra linha · arraste arquivos aqui</span>
+        <button id="btnSpeakToggle" class="chip" title="Ligar/desligar a voz">🔊 voz</button>
+      </div>
+    </div>
+
+    <!-- --------------------- VIEW: BASE DE CONHECIMENTO ------------------ -->
+    <div id="viewKb" class="view">
+      <div class="kb-top">
+        <button id="btnAdd" class="primary-btn">＋ Adicionar documentos</button>
+      </div>
+      <p class="kb-stats" id="kbStats">Nenhum documento ainda.</p>
+
+      <div id="kbProgress" class="progress hidden">
+        <div class="progress-bar"><span id="progressFill"></span></div>
+        <span id="progressLabel">indexando…</span>
+      </div>
+
+      <div id="kbList" class="kb-list"></div>
+      <div class="kb-foot">
+        <button id="btnClearKb" class="ghost-btn danger">Limpar base</button>
+        <span class="kb-note">Aceita PDF, EPUB, DOCX, ODT, TXT, MD, HTML, RTF…</span>
+      </div>
+    </div>
+
+    <!-- --------------------------- VIEW: AJUSTES ------------------------- -->
+    <div id="viewSettings" class="view">
+      <label class="field">
+        <span>Modelo de conversa</span>
+        <select id="setModel"></select>
+      </label>
+      <label class="field">
+        <span>Modelo de embeddings</span>
+        <select id="setEmbedModel"></select>
+      </label>
+      <label class="field">
+        <span>Voz</span>
+        <select id="setVoice"></select>
+      </label>
+      <label class="field range">
+        <span>Velocidade da fala <b id="lblSpeed">1,00</b></span>
+        <input type="range" id="setSpeed" min="0.6" max="1.6" step="0.05" />
+      </label>
+      <label class="field" id="fieldOutput">
+        <span>Saída de áudio (onde o mascote fala)</span>
+        <select id="setOutput"></select>
+        <small class="kb-note">
+          <b>Padrão do sistema</b> acompanha o Windows — é o recomendado para fones
+          Bluetooth, que trocam de perfil quando o microfone é usado.
+        </small>
+      </label>
+      <button type="button" id="btnTestVoice" class="ghost-btn">🔊 Testar a voz agora</button>
+      <label class="field check">
+        <input type="checkbox" id="setTts" />
+        <span>Responder com voz</span>
+      </label>
+      <label class="field check">
+        <input type="checkbox" id="setKb" />
+        <span>Usar a base de conhecimento</span>
+      </label>
+      <label class="field range">
+        <span>Trechos recuperados <b id="lblTopK">5</b></span>
+        <input type="range" id="setTopK" min="1" max="10" step="1" />
+      </label>
+      <label class="field range">
+        <span>Núcleos para a IA <b id="lblThreads">auto</b></span>
+        <input type="range" id="setThreads" min="0" max="16" step="1" />
+        <small class="kb-note">0 = automático. Em WSL2, menos núcleos costuma ser bem mais rápido.</small>
+      </label>
+      <label class="field range">
+        <span>Tamanho máximo da resposta <b id="lblMaxTok">400</b> tokens</span>
+        <input type="range" id="setMaxTok" min="100" max="1000" step="50" />
+      </label>
+      <label class="field">
+        <span>Personalidade (prompt do sistema)</span>
+        <textarea id="setPrompt" rows="6"></textarea>
+      </label>
+      <div class="settings-foot">
+        <button id="btnSaveSettings" class="primary-btn">Salvar</button>
+        <button id="btnOpenData" class="ghost-btn">Abrir pasta de dados</button>
+      </div>
+      <p class="kb-note" id="settingsMsg"></p>
+    </div>
+
+  </section>
+
+  <!-- ============================ MASCOTE ============================ -->
+  <div id="mascot" class="mascot" title="Clique para conversar · arraste para mover">
+    <div class="rings" id="rings">
+      <span></span><span></span><span></span>
+    </div>
+    <svg class="mascot-svg" viewBox="0 0 120 130" width="100%" height="100%">
+      <defs>
+        <radialGradient id="bodyGrad" cx="38%" cy="28%" r="82%">
+          <stop offset="0%" stop-color="#7ff0ff" />
+          <stop offset="55%" stop-color="#37c8dd" />
+          <stop offset="100%" stop-color="#1d8fb4" />
+        </radialGradient>
+        <linearGradient id="antennaGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#9ff6ff" />
+          <stop offset="100%" stop-color="#2aa8c4" />
+        </linearGradient>
+      </defs>
+
+      <!-- antena -->
+      <g class="antenna">
+        <path d="M60 26 L60 12" stroke="url(#antennaGrad)" stroke-width="3.4" stroke-linecap="round" fill="none" />
+        <circle class="antenna-ball" cx="60" cy="9" r="5" />
+      </g>
+
+      <!-- corpo -->
+      <circle cx="60" cy="70" r="46" fill="url(#bodyGrad)" />
+      <ellipse cx="43" cy="48" rx="16" ry="12" fill="#ffffff" opacity="0.22" />
+
+      <!-- olhos -->
+      <g class="eyes">
+        <g class="eye">
+          <ellipse cx="46" cy="64" rx="8.5" ry="10" fill="#13202c" />
+          <circle cx="49" cy="60" r="3" fill="#ffffff" />
+        </g>
+        <g class="eye">
+          <ellipse cx="74" cy="64" rx="8.5" ry="10" fill="#13202c" />
+          <circle cx="77" cy="60" r="3" fill="#ffffff" />
+        </g>
+      </g>
+
+      <!-- bochechas -->
+      <ellipse cx="26" cy="82" rx="8" ry="5" fill="#ff8a9e" opacity="0.42" />
+      <ellipse cx="94" cy="82" rx="8" ry="5" fill="#ff8a9e" opacity="0.42" />
+
+      <!-- boca -->
+      <path class="mouth-smile" d="M43 84 Q60 100 77 84" stroke="#13202c" stroke-width="4.2"
+            fill="none" stroke-linecap="round" />
+      <ellipse class="mouth-talk" cx="60" cy="90" rx="12" ry="8" fill="#13202c" />
+    </svg>
+    <div id="bubble" class="bubble hidden"></div>
+  </div>
+
+</div>
+
+<!-- ponte web: não faz nada quando o Electron já definiu window.nino -->
+<script src="bridge-web.js"></script>
+<script src="mascot.js"></script>
+</body>
+</html>

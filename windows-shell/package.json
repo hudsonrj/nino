@@ -1,0 +1,15 @@
+{
+  "name": "nino-shell",
+  "version": "0.1.0",
+  "description": "Janela nativa do mascote Nino para Windows (o cérebro roda no WSL)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --enable-logging"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^44.4.5"
+  }
+}
