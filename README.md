@@ -84,16 +84,25 @@ por pergunta extra. Para cada mensagem:
 | Quão urgente é? | nota (4 níveis) | ordena a fila |
 | Que tipo de remetente? | escolha | cliente, lead, fornecedor, financeiro, propaganda… |
 | Precisa de resposta escrita sua? | sim/não | decide se vale gastar o modelo local |
+| Parece golpe ou alerta de segurança? | sim/não | tira o phishing do balde "pode apagar sem ler" |
 
 Para cada compromisso: **o que preparar antes** (escolha) e **se não pode
 faltar** (sim/não).
 
-Duas regras do guia estão implementadas de propósito:
+Três decisões que valem explicar:
 
 - **A confiança decide quem age sozinho.** Abaixo do limite que você escolher, o
   item vai para a pilha *"o JEV não teve certeza — decida você"*.
+- **Só a confiança da ação bloqueia.** O tipo de remetente é rótulo: com oito
+  opções, a confiança dele fica baixa mesmo quando a ação está claríssima. Na
+  primeira versão eu exigia as duas, e o e-mail mais urgente da caixa ia parar
+  na pilha de incerteza enquanto *Responder hoje* ficava vazia.
+- **Golpe não é lixo comum.** Um phishing classificado como "descartar" sairia no
+  balde *"pode apagar sem ler"* — se fosse um aviso real do banco, você perderia.
+  Por isso a pergunta extra: suspeito vai para a sua própria pilha.
 - **O JEV não faz contas nem compara datas.** Quem ordena e soma é o código; o
-  JEV só dá os julgamentos.
+  JEV só dá os julgamentos. E quando ele não tem certeza do preparo de um
+  compromisso, o resumo **não afirma** nada em vez de inventar.
 
 ### Enviar respostas
 
@@ -122,6 +131,22 @@ npm run test:jev
 Sobe um servidor TypeSafe falso e confere o formato exato da requisição, a
 leitura das três formas de resposta, o cálculo de confiança, um lote de 100
 perguntas numa chamada e as mensagens de erro. Não gasta nada.
+
+### Testar com a chave de verdade
+
+```bash
+npm run test:dia
+```
+
+Faz **uma** chamada real (≈ US$ 0,0002) com sete e-mails **inventados** — um
+urgente, uma proposta, uma newsletter, um phishing e um vago de propósito — e
+mostra como o JEV classificou cada um. Serve para conferir se as perguntas em
+inglês produzem decisões sensatas com **conteúdo em português**, que é o idioma
+dos seus e-mails. Nenhum dado seu é enviado.
+
+Ele também confere o resultado sozinho e avisa se algo se perdeu: nada marcado
+para hoje, suspeito caindo no lixo comum, ou o resumo afirmando um preparo sem
+confiança.
 
 ---
 
@@ -372,6 +397,7 @@ node scripts/smoke-test.js              # corpus pequeno, valida todo o caminho
 node scripts/smoke-test.js --full       # indexa o livro de teste inteiro
 node scripts/smoke-test.js --clear      # limpa a base antes
 node scripts/test-jev.js                # integração com o JEV, sem chave real
+node scripts/test-dia.js                # uma chamada real, com e-mails inventados
 ```
 
 Ele verifica extração, chunking, embeddings, busca semântica, conversa com RAG,

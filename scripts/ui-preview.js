@@ -203,6 +203,16 @@ app.whenReady().then(async () => {
   await settle(page, 700);
   await shoot(win, '11-dia-rascunho');
 
+  /* ---------------- 12. Meu dia: pilhas de baixo --------------------- */
+  await page.executeJavaScript(`
+    const g = [...document.querySelectorAll('.dia-grupo')]
+      .find((x) => /Suspeito/.test(x.querySelector('h4')?.textContent || ''));
+    if (g) g.scrollIntoView({ block: 'end' });
+    true
+  `);
+  await settle(page, 700);
+  await shoot(win, '12-dia-suspeito');
+
   console.log('\ncapturas prontas em', OUT);
   app.quit();
 });

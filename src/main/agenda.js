@@ -215,6 +215,16 @@ function perguntasMensagens(deslocamento, quantidade) {
     q[`precisa_escrever_${indice}`] = jev.noul(
       `Does \`${alvo}\` need a considered written reply from me, rather than a one-line acknowledgement or no reply at all?`
     );
+    // Pergunta de segurança: um golpe não é lixo comum. Se o usuário apagar
+    // sem ler um aviso falso que na verdade era do banco dele, o prejuízo é
+    // bem maior do que ler uma propaganda a mais.
+    q[`suspeito_${indice}`] = jev.noul(
+      `Does \`${alvo}\` look like a phishing attempt, a scam, or a security alert about my own accounts that I should verify myself rather than simply delete?`,
+      {
+        true: 'it tries to scare me into clicking, confirming data or paying, or it warns about activity on my accounts',
+        false: 'ordinary mail: it is not asking me to verify credentials or send money urgently',
+      }
+    );
   }
   return q;
 }
@@ -363,8 +373,13 @@ async function triar(opcoes = {}) {
     const urgencia = r.respostas[`urgencia_${i}`];
     const tipo = r.respostas[`tipo_${i}`];
     const escrever = r.respostas[`precisa_escrever_${i}`];
+    const suspeito = r.respostas[`suspeito_${i}`];
     const confiancaAcao = jev.confianca(acao);
-    const seguro = jev.confiavel(acao, minimo) && jev.confiavel(tipo, minimo);
+    // Quem manda é a confiança da AÇÃO — é ela que decide o comportamento.
+    // O tipo de remetente é só um rótulo para a tela, e com oito opções a
+    // confiança dele costuma ficar baixa mesmo quando a ação está claríssima.
+    // Exigir as duas jogava e-mail urgente na pilha de incerteza à toa.
+    const seguro = jev.confiavel(acao, minimo);
     mensagens.push({
       indice: i,
       uid: m.uid,
@@ -383,8 +398,11 @@ async function triar(opcoes = {}) {
       urgenciaRotulo: ROTULOS.urgencia[Math.round(jev.valor(urgencia) ?? 0)] || '?',
       tipo: jev.opcao(tipo),
       tipoRotulo: ROTULOS.tipo[jev.opcao(tipo)] || jev.opcao(tipo) || '?',
+      tipoConfiavel: jev.confiavel(tipo, minimo),
       precisaEscrever: (jev.probabilidade(escrever) ?? 0) >= 0.5,
       probabilidadeEscrever: jev.probabilidade(escrever),
+      suspeito: (jev.probabilidade(suspeito) ?? 0) >= 0.5,
+      probabilidadeSuspeito: jev.probabilidade(suspeito),
       confianca: confiancaAcao,
       confiavel: seguro,
       probabilidades: (acao && acao.probabilities) || null,
@@ -394,14 +412,20 @@ async function triar(opcoes = {}) {
   const eventos = p.planos.map((e, i) => {
     const preparo = r.respostas[`preparo_${i}`];
     const essencial = r.respostas[`essencial_${i}`];
+    const preparoConfiavel = jev.confiavel(preparo, minimo);
+    const escolhaPreparo = jev.opcao(preparo);
     return {
       ...e,
-      preparo: jev.opcao(preparo),
-      preparoRotulo: ROTULOS.preparo[jev.opcao(preparo)] || jev.opcao(preparo) || '?',
+      preparo: escolhaPreparo,
+      preparoRotulo: ROTULOS.preparo[escolhaPreparo] || escolhaPreparo || '?',
+      // Quando o JEV não tem certeza do preparo, não afirmamos nada: um
+      // evento de confiança 0,21 dizendo "preparar material" fazia o modelo
+      // local cobrar preparo que talvez não exista.
+      preparoConfiavel,
       essencial: (jev.probabilidade(essencial) ?? 0) >= 0.5,
       probabilidadeEssencial: jev.probabilidade(essencial),
       confianca: jev.confianca(preparo),
-      confiavel: jev.confiavel(preparo, minimo),
+      confiavel: preparoConfiavel,
     };
   });
 
@@ -417,9 +441,18 @@ async function triar(opcoes = {}) {
   const daSemana = ordenadas.filter(
     (m) => m.confiavel && m.acao === 'responder_semana' && !filaDoDia.includes(m)
   );
-  const ruido = ordenadas.filter((m) => m.confiavel && m.acao === 'descartar');
+  // Um golpe sai do balde "pode apagar sem ler": pode ser um aviso de verdade.
+  const suspeitos = ordenadas.filter((m) => m.suspeito && !filaDoDia.includes(m));
+  const ruido = ordenadas.filter(
+    (m) => m.confiavel && m.acao === 'descartar' && !m.suspeito
+  );
 
-  const eventosRelevantes = eventos.filter((e) => e.essencial || e.preparo !== 'nada');
+  const eventosRelevantes = eventos.filter(
+    (e) => e.essencial || (e.preparoConfiavel && e.preparo !== 'nada')
+  );
+  const eventosIncerto = eventos.filter(
+    (e) => !e.essencial && !e.preparoConfiavel
+  );
 
   return {
     ok: true,
@@ -435,12 +468,22 @@ async function triar(opcoes = {}) {
     filaDoDia,
     revisar,
     daSemana,
+    suspeitos,
     ruido,
     eventos,
     eventosRelevantes,
+    eventosIncerto,
     porDia: p.dados.porDia,
     avisos: p.dados.avisos,
-    resumo: montarResumo({ filaDoDia, daSemana, revisar, eventosRelevantes, ruido }),
+    resumo: montarResumo({
+      filaDoDia,
+      daSemana,
+      revisar,
+      eventosRelevantes,
+      eventosIncerto,
+      suspeitos,
+      ruido,
+    }),
   };
 }
 
@@ -448,7 +491,15 @@ async function triar(opcoes = {}) {
  * Texto curto e factual para o modelo local ler e transformar em fala.
  * Nada aqui é escrito pelo JEV: são os fatos que ele classificou.
  */
-function montarResumo({ filaDoDia, daSemana, revisar, eventosRelevantes, ruido }) {
+function montarResumo({
+  filaDoDia,
+  daSemana,
+  revisar,
+  eventosRelevantes,
+  eventosIncerto = [],
+  suspeitos = [],
+  ruido,
+}) {
   const l = [];
   if (eventosRelevantes.length) {
     l.push('AGENDA:');
@@ -456,7 +507,7 @@ function montarResumo({ filaDoDia, daSemana, revisar, eventosRelevantes, ruido }
       l.push(
         `- ${e.day} ${e.time}: ${e.title}` +
           (e.location ? ` (${e.location})` : '') +
-          ` [${e.preparoRotulo}]`
+          (e.preparoConfiavel && e.preparo !== 'nada' ? ` [${e.preparoRotulo}]` : '')
       );
     }
   }
@@ -474,6 +525,18 @@ function montarResumo({ filaDoDia, daSemana, revisar, eventosRelevantes, ruido }
     l.push('INCERTO (o JEV não teve certeza, precisa do seu olho):');
     for (const m of revisar.slice(0, 8)) {
       l.push(`- ${m.de}: ${m.assunto} (ação sugerida: ${m.acaoRotulo})`);
+    }
+  }
+  if (eventosIncerto.length) {
+    l.push('AGENDA SEM CERTEZA:');
+    for (const e of eventosIncerto.slice(0, 5)) {
+      l.push(`- ${e.day} ${e.time}: ${e.title} (o JEV não soube dizer se exige preparo)`);
+    }
+  }
+  if (suspeitos.length) {
+    l.push('SUSPEITO (parece golpe ou alerta de segurança — confira antes de apagar):');
+    for (const m of suspeitos.slice(0, 5)) {
+      l.push(`- ${m.de}: ${m.assunto}`);
     }
   }
   if (ruido.length) {

@@ -132,6 +132,16 @@ const MOCK_TRIAGEM = {
       urgenciaRotulo: 'pode esperar', tipo: 'lead', tipoRotulo: 'cliente em potencial',
       precisaEscrever: true, probabilidadeEscrever: 0.58, confianca: 0.52, confiavel: false,
     },
+    {
+      indice: 5, uid: '9', de: 'Suporte Banco Digital', enderecoDe: 'seguranca@banco-alerta.com',
+      assunto: 'Sua conta será bloqueada em 24 horas', data: 'Fri, 25 Sep 2026 03:22:00 -0300',
+      naoLido: true, messageId: '<f@x>', referencias: '', anexos: [],
+      trecho: 'Detectamos um acesso suspeito. Confirme seus dados e senha para evitar o bloqueio.',
+      acao: 'descartar', acaoRotulo: 'descartar', urgencia: 2,
+      urgenciaRotulo: 'importante', tipo: 'sistema', tipoRotulo: 'aviso automático',
+      precisaEscrever: false, probabilidadeEscrever: 0.22, confianca: 0.85, confiavel: true,
+      suspeito: true, probabilidadeSuspeito: 0.94,
+    },
   ],
   ordenadas: [],
   filaDoDia: [],
@@ -147,6 +157,14 @@ MOCK_TRIAGEM.ordenadas = MOCK_TRIAGEM.mensagens;
 MOCK_TRIAGEM.filaDoDia = MOCK_TRIAGEM.mensagens.filter((m) => m.acao === 'responder_agora');
 MOCK_TRIAGEM.daSemana = MOCK_TRIAGEM.mensagens.filter((m) => m.acao === 'responder_semana');
 MOCK_TRIAGEM.revisar = MOCK_TRIAGEM.mensagens.filter((m) => !m.confiavel);
+MOCK_TRIAGEM.suspeitos = MOCK_TRIAGEM.mensagens.filter((m) => m.suspeito);
+MOCK_TRIAGEM.eventosIncerto = [
+  {
+    index: 1, day: 'sex 25/09', time: '17:00-17:30', title: 'Revisão semanal',
+    location: '', preparo: 'preparar_material', preparoRotulo: 'preparar material',
+    preparoConfiavel: false, essencial: false, probabilidadeEssencial: 0.48, confianca: 0.25,
+  },
+];
 MOCK_TRIAGEM.ruido = Array.from({ length: 6 }, (_, i) => ({
   indice: 10 + i,
   uid: `r${i}`,

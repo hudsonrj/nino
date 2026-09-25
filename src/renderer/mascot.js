@@ -1150,11 +1150,12 @@ async function aprovarETriar() {
     }
     dia.triagem = t;
     renderDia(t);
+    const suspeitos = (t.suspeitos || []).length;
     diaStatus(
       `Pronto em ${(t.ms / 1000).toFixed(1)}s — US$ ${Number(t.custoUSD).toFixed(6)}. ` +
         `${t.filaDoDia.length} para hoje, ${t.revisar.length} incerta(s), ` +
-        `${t.ruido.length} descartável(is).`,
-      'ok'
+        `${suspeitos} suspeita(s), ${t.ruido.length} descartável(is).`,
+      suspeitos ? 'erro' : 'ok'
     );
   } catch (err) {
     diaStatus(`Falhou: ${err.message}`, 'erro');
@@ -1167,10 +1168,11 @@ async function aprovarETriar() {
 function cartaoMensagem(m, opcoes) {
   const { comRascunho = false } = opcoes || {};
   const tags = [
-    `<span class="tag">${esc(m.tipoRotulo)}</span>`,
+    `<span class="tag">${esc(m.tipoRotulo)}${m.tipoConfiavel === false ? ' ?' : ''}</span>`,
     `<span class="tag ${/urgente/.test(m.urgenciaRotulo) ? 'quente' : 'frio'}">${esc(
       m.urgenciaRotulo
     )}</span>`,
+    m.suspeito ? '<span class="tag suspeito">⚠ suspeito</span>' : '',
     m.precisaEscrever ? '<span class="tag ok">pede resposta sua</span>' : '',
     m.confianca != null
       ? `<span class="tag conf">JEV ${Math.round(m.confianca * 100)}%</span>`
@@ -1225,7 +1227,13 @@ function cartaoEvento(e) {
     <div class="ev-titulo">${esc(e.title)}</div>
     ${e.location ? `<div class="ev-local">📍 ${esc(e.location)}</div>` : ''}
     <div class="msg-card-tags">
-      <span class="tag">${esc(e.preparoRotulo)}</span>
+      ${
+        e.preparoConfiavel && e.preparo !== 'nada'
+          ? `<span class="tag">${esc(e.preparoRotulo)}</span>`
+          : e.preparoConfiavel
+            ? '<span class="tag">nada a preparar</span>'
+            : '<span class="tag duvida">preparo incerto</span>'
+      }
       ${e.repeats ? '<span class="tag">repete</span>' : ''}
       ${
         e.confianca != null
@@ -1272,6 +1280,15 @@ function renderDia(t) {
         'O JEV não teve certeza — decida você',
         t.revisar.map((m) => cartaoMensagem(m, { comRascunho: true })),
         'incerto'
+      )
+    );
+  }
+  if (t.suspeitos && t.suspeitos.length) {
+    partes.push(
+      grupo(
+        'Suspeito — confira antes de apagar',
+        t.suspeitos.map((m) => cartaoMensagem(m, { comRascunho: false })),
+        'suspeito'
       )
     );
   }

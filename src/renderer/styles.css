@@ -668,3 +668,10 @@ body.shell .send-btn {
 }
 
 .vazio { font-size: 10.5px; color: #64798a; font-style: italic; padding: 2px 0; }
+
+.dia-grupo.suspeito > h4 { color: var(--danger); }
+.tag.suspeito {
+  background: rgba(255, 107, 129, 0.2);
+  color: #ffb3c0;
+  border-color: rgba(255, 107, 129, 0.55);
+}

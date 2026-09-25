@@ -9,6 +9,7 @@
     "web": "node src/server/web.js",
     "test": "node scripts/smoke-test.js",
     "test:jev": "node scripts/test-jev.js",
+    "test:dia": "node scripts/test-dia.js",
     "test:ui": "electron --no-sandbox scripts/ui-preview.js /tmp/nino-ui"
   },
   "author": "",
