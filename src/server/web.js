@@ -825,15 +825,45 @@ async function handleAgendaPerguntar(req, res) {
     }
   };
 
-  if (!ultimaTriagem) {
-    send({
-      type: 'error',
-      error:
-        'Ainda não olhei seu dia nesta sessão. Abra a visão 🌤️ e clique em ' +
-        '"Fazer o resumo do dia" — lá você vê e aprova o que sai da sua ' +
-        'máquina. Depois eu respondo aqui no chat normalmente.',
-    });
+  /** Resposta curta escrita pelo código: sem modelo, sem chance de inventar. */
+  const responderDireto = (texto) => {
+    send({ type: 'token', token: texto, full: texto });
+    send({ type: 'done', text: texto, stats: {} });
     res.end();
+  };
+
+  const conta = (credentials.google().email || '').trim();
+  const caminho = mailbox.caminhoDeEmail();
+
+  // Se a pergunta cita um endereço que NÃO é o conectado, respondemos o fato
+  // em vez de deixar o modelo local improvisar. Foi exatamente assim que
+  // apareceu uma resposta inventada sobre "reuniões da fábrica".
+  const citado = /[\w.+-]+@[\w-]+\.[\w.]+/.exec(pergunta);
+  if (citado && conta && citado[0].toLowerCase() !== conta.toLowerCase()) {
+    responderDireto(
+      `Não. Estou conectado na conta ${conta}, não em ${citado[0]}. ` +
+        `Se você quer a outra conta, desconecte e conecte de novo escolhendo ` +
+        `o perfil certo na tela do Google.`
+    );
+    return;
+  }
+
+  if (!caminho) {
+    responderDireto(
+      'Ainda não tenho acesso a e-mail nem agenda. Vá em Ajustes e conecte ' +
+        'com o Google, ou informe e-mail e senha de app.'
+    );
+    return;
+  }
+
+  if (!ultimaTriagem) {
+    responderDireto(
+      `Estou conectado na conta ${conta || '(desconhecida)'}, com acesso a ` +
+        `e-mail e agenda pelo ${mailbox.mostrarCaminho(caminho)}. ` +
+        'Mas ainda não olhei seu dia nesta sessão: abra a visão 🌤️ e clique em ' +
+        '"Fazer o resumo do dia". Lá você vê e aprova o que sai da sua máquina. ' +
+        'Depois eu respondo aqui no chat normalmente.'
+    );
     return;
   }
 
@@ -841,9 +871,12 @@ async function handleAgendaPerguntar(req, res) {
   const minutos = Math.round(idade / 60000);
 
   await session.ask(
-    `Fatos do meu dia, classificados pelo JEV${minutos > 0 ? ` há ${minutos} minuto(s)` : ''}:\n\n` +
+    `Conta conectada: ${conta || 'desconhecida'} (${mailbox.mostrarCaminho(caminho)}).\n\n` +
+      `Fatos do meu dia, classificados pelo JEV${minutos > 0 ? ` há ${minutos} minuto(s)` : ''}:\n\n` +
       `${ultimaTriagem.resumo}\n\n` +
-      `Minha pergunta: ${pergunta}`,
+      `Minha pergunta: ${pergunta}\n\n` +
+      'Responda só com base nos fatos acima. Se a resposta não estiver neles, ' +
+      'diga que não sabe — não invente compromissos nem mensagens.',
     {
       onToken: (token, full) => send({ type: 'token', token, full }),
       onDone: (r) => send({ type: 'done', text: r.text, stats: r.stats }),

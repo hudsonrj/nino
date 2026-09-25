@@ -10,6 +10,7 @@
     "test": "node scripts/smoke-test.js",
     "test:jev": "node scripts/test-jev.js",
     "test:google": "node scripts/test-google.js",
+    "test:intencoes": "node scripts/test-intencoes.js",
     "test:dia": "node scripts/test-dia.js",
     "test:ui": "electron --no-sandbox scripts/ui-preview.js /tmp/nino-ui"
   },

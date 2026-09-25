@@ -270,9 +270,12 @@ function urlAutorizacao(estado, endereco) {
     redirect_uri: endereco || redirecionamento(),
     response_type: 'code',
     // access_type=offline + prompt=consent é o que garante o refresh token.
-    // Sem o prompt, uma segunda autorização não devolve refresh token novo.
+    // Sem `consent`, uma segunda autorização não devolve refresh token novo.
+    // `select_account` força o Google a MOSTRAR a escolha de conta: sem isso
+    // ele usa silenciosamente a conta já logada no navegador, e foi assim
+    // que uma autorização acabou na conta errada.
     access_type: 'offline',
-    prompt: 'consent',
+    prompt: 'consent select_account',
     include_granted_scopes: 'true',
     scope: ESCOPOS.join(' '),
     state: estado,

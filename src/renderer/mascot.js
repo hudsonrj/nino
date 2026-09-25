@@ -369,6 +369,26 @@ function paintVoiceToggle() {
  * Reconhece pedidos escritos que só fazem sentido com imagem.
  * Assim "olhe para mim" liga a câmera mesmo sem clicar no botão.
  */
+/**
+ * Tira os acentos antes de comparar: "você vê" vira "voce ve".
+ *
+ * Isso não é cosmético. O `\b` do JavaScript (fronteira de palavra) é
+ * definido por `\w`, que é SOMENTE ASCII: "ê" e "ç" não contam como letra.
+ * Então `/v[êe]\b/` NÃO casa com "vê" — o `\b` depois de um caractere não
+ * ASCII nunca é satisfeito. Qualquer padrão que termine numa letra acentuada
+ * falha em silêncio, e foi assim que "o que você vê?" deixou de ligar a
+ * câmera sem ninguém perceber.
+ *
+ * Dobrando os acentos do TEXTO na entrada, todo caractere comparado é ASCII e
+ * os padrões continuam funcionando com suas alternativas acentuadas — a
+ * alternativa sem acento é a que casa.
+ */
+function dobrarAcentos(texto) {
+  return String(texto || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
 const PADROES_CAMERA = [
   /\bolh[ae]\s+(para\s+|pra\s+|pro\s+)?(mim|eu|meu\s+lado)\b/i,
   /\bme\s+(olh[ae]|veja|v[êe]|enxerg[ae])\b/i,
@@ -384,7 +404,7 @@ const PADROES_CAMERA = [
 // ("a tela do celular quebrou"). Por isso exigimos o possessivo em primeira
 // pessoa ou um verbo de olhar junto.
 const PADROES_TELA = [
-  /\b(minha|essa|esta|nesta|nessa)\s+tela\b/i,
+  /\b(minha|essa|esta|nesta|nessa|na)\s+tela\b/i,
   /\btela\b[^.]{0,30}\b(explica|olh\w*|veja|v[êe]|analis\w*|mostra|print)\b/i,
   /\b(explica|olh\w*|veja|v[êe]|analis\w*|mostra|print)\b[^.]{0,30}\btela\b/i,
   /\bo\s+que\s+eu\s+estou\s+fazendo\b/i,
@@ -395,8 +415,9 @@ const PADROES_TELA = [
 /** @returns {'camera'|'screen'|null} */
 function detectVisionIntent(texto) {
   if (!texto) return null;
-  if (PADROES_CAMERA.some((re) => re.test(texto))) return 'camera';
-  if (PADROES_TELA.some((re) => re.test(texto))) return 'screen';
+  const t = dobrarAcentos(texto);
+  if (PADROES_CAMERA.some((re) => re.test(t))) return 'camera';
+  if (PADROES_TELA.some((re) => re.test(t))) return 'screen';
   return null;
 }
 
@@ -964,27 +985,50 @@ const esc = escapeHtml;
 /* ---- perguntas sobre o próprio dia, feitas no chat ---- */
 
 /**
- * Reconhece pedidos sobre e-mail e agenda. Exige posse em primeira pessoa
- * ("minha agenda", "meus e-mails") ou uma expressão fixa ("o que tenho hoje").
- * Preferimos perder um caso a disparar à toa: um falso positivo aqui custa de
- * 1 a 3 minutos do modelo local.
+ * Reconhece pedidos sobre os dados do próprio usuário: e-mail, agenda,
+ * calendário.
+ *
+ * A primeira versão só conhecia a palavra "agenda" e deixava passar
+ * "calendário" — então "tem acesso ao calendário?" caía no chat comum, ia
+ * para a base de conhecimento e o modelo local INVENTAVA uma resposta. Uma
+ * pergunta sobre os dados do usuário nunca pode acabar no RAG.
+ *
+ * A regra agora é em duas partes: o texto precisa falar de um desses tipos de
+ * dado E demonstrar posse ("meu calendário") ou pergunta de acesso ("você
+ * consegue ver..."). Isso mantém de fora coisas como "escreva um e-mail para
+ * o João" e "qual a agenda do evento".
  */
+const TERMOS_DADOS =
+  /\b(agenda|calend[áa]rios?|e-?mails?|correio|caixa de entrada|inbox|compromissos?|reuni[õo]es?|mensagens)\b/i;
+
+const POSSE = /\b(minha|meu|meus|minhas)\b/i;
+
+const PERGUNTA_DE_ACESSO =
+  /\b(tem acesso|tens acesso|voc[êe]\s+(tem|consegue|pode|v[êe]|enxerga|acessa|sabe|leu|le)|consegue\s+(ver|acessar|ler|pegar|olhar)|pode\s+(ver|acessar|ler|olhar)|est[áa]\s+(lendo|vendo|acessando)|tem como\s+(ver|acessar|ler))\b/i;
+
+/** Perguntas conceituais não são sobre os dados do usuário. */
+const CONCEITUAL =
+  /\b(o que (é|e|significa|quer dizer|s[ãa]o)|me explique|me explica|o que seria|para que serve|qual a defini[çc][ãa]o)\b/i;
+
 const PADROES_DIA = [
-  /\b(minha|meu|meus|minhas)\s+(agenda|dia|e-?mails?|correio|caixa de entrada|compromissos?|reuni[õo]es?|inbox|mensagens)\b/i,
-  /\b(agenda|compromissos?|reuni[õo]es?)\s+(de|da|do|para)\s+(hoje|amanh[ãa]|esta semana|essa semana)\b/i,
-  /\bo que (eu )?(tenho|tem|marcado|tenho marcado)\s+(hoje|amanh[ãa]|na agenda|para hoje|marcado)\b/i,
-  /\b(resumo|resuma|como (est[áa]|vai))\s+(o\s+)?(meu\s+)?dia\b/i,
-  /\b(alguma coisa|algo|tem algo)\s+(urgente|importante)\b/i,
+  // "o que eu tenho hoje", "o que está marcado"
+  /\bo que (eu )?(tenho|tem|est[áa] marcado|foi marcado)\b/i,
+  // "resumo do dia", "como está meu dia"
+  /\b(resumo|resuma)\b(\s+(o|a|do|da|um|uma|meu|minha|nosso|nossa)){0,3}\s+dia\b/i,
+  /\bcomo (est[áa]|vai|foi)\s+(o\s+)?(meu\s+)?dia\b/i,
+  // "tem algo urgente?"
+  /\b(alguma coisa|algo|tem algo)\s+(urgente|importante|para (eu )?(ver|responder|fazer))\b/i,
   /\bo que chegou\b/i,
   /\bpreciso responder (algum|alguma|algu[ée]m)\b/i,
 ];
 
 function detectarIntencaoDeDia(texto) {
-  const t = String(texto || '').trim();
+  const t = dobrarAcentos(texto).trim();
   if (t.length < 4) return false;
-  // Perguntas conceituais não são sobre o dia do usuário.
-  if (/\b(o que (é|e|significa|quer dizer)|me explique|o que s[ãa]o)\b/i.test(t)) return false;
-  return PADROES_DIA.some((re) => re.test(t));
+  if (CONCEITUAL.test(t)) return false;
+  if (PADROES_DIA.some((re) => re.test(t))) return true;
+  if (!TERMOS_DADOS.test(t)) return false;
+  return POSSE.test(t) || PERGUNTA_DE_ACESSO.test(t);
 }
 
 /** Responde sobre o dia usando a última triagem aprovada. */

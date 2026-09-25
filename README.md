@@ -464,6 +464,7 @@ node scripts/smoke-test.js --full       # indexa o livro de teste inteiro
 node scripts/smoke-test.js --clear      # limpa a base antes
 node scripts/test-jev.js                # integração com o JEV, sem chave real
 node scripts/test-google.js             # OAuth: MIME, RFC 2822, fusos, diagnóstico
+node scripts/test-intencoes.js          # a detecção de intenção do campo de texto
 node scripts/test-dia.js                # uma chamada real, com e-mails inventados
 ```
 
