@@ -42,6 +42,24 @@ const DEFAULT_SCREEN_PROMPT = `Olhe esta captura da tela do usuário e explique,
 
 Seja direto e útil, sem descrever pixel por pixel. Se não der para entender algum trecho, diga. De 3 a 5 frases.`;
 
+/** Prompt usado quando o mascote resume o dia a partir do e-mail e da agenda. */
+const DEFAULT_AGENDA_PROMPT = `Você está dando o resumo do dia para o usuário, em voz alta.
+
+Abaixo vêm os fatos já classificados pelo JEV (um modelo de decisão rápido):
+compromissos da agenda, mensagens que pedem resposta hoje, mensagens que
+podem esperar, o que ficou incerto e o que é ruído. O JEV decidiu; você
+apenas comunica.
+
+Regras:
+- Fale em português do Brasil, com frases curtas (é LIDO EM VOZ ALTA).
+- Sem markdown, listas, tabelas, emojis ou símbolos.
+- Comece pelo que é mais urgente hoje. Se o dia estiver tranquilo, diga isso.
+- Cite nomes de pessoas e assuntos concretos; nada de generalidades.
+- Diga quantas mensagens podem ser descartadas sem leitura.
+- Se houver itens marcados como incertos, avise que o JEV não teve certeza e
+  que vale a pena olhar.
+- Não invente nada que não esteja nos fatos. De 4 a 8 frases.`;
+
 const DEFAULTS = {  model: 'qwen3.5:2b',
   embedModel: 'bge-m3',
   voice: 'pt_BR-faber-medium',
@@ -74,9 +92,24 @@ const DEFAULTS = {  model: 'qwen3.5:2b',
   screenEnabled: true,
   // Lado maior da imagem enviada ao modelo. Menor = bem mais rápido na CPU.
   maxImageSide: 640,
+  // JEV (TypeSafe): modelo de decisão rápido e barato, usado para triar
+  // e-mail e agenda antes de gastar o modelo local. Fica DESLIGADO por
+  // padrão porque o conteúdo sai da máquina — diferente do resto do Nino.
+  jevEnabled: false,
+  jevModel: 'jev-latest',
+  // Abaixo desta confiança o JEV não decide sozinho: o item vai para a
+  // pilha "incerto" e o usuário julga.
+  jevConfiancaMinima: 0.6,
+  agendaDias: 2,
+  agendaMensagens: 12,
+  agendaSomenteNaoLidos: true,
+  // Enviar o corpo dos e-mails ao JEV dá uma triagem bem melhor do que só
+  // o assunto, mas manda mais conteúdo para fora. Fica a critério do usuário.
+  agendaIncluirCorpo: true,
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   cameraPrompt: DEFAULT_CAMERA_PROMPT,
   screenPrompt: DEFAULT_SCREEN_PROMPT,
+  agendaPrompt: DEFAULT_AGENDA_PROMPT,
 };
 
 /** Número de threads de inferência sugerido para esta máquina. */
@@ -133,6 +166,7 @@ module.exports = {
   DEFAULT_SYSTEM_PROMPT,
   DEFAULT_CAMERA_PROMPT,
   DEFAULT_SCREEN_PROMPT,
+  DEFAULT_AGENDA_PROMPT,
   DEFAULTS,
   autoThreads,
   ensureDirs,

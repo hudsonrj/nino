@@ -89,6 +89,7 @@ function createChatSession() {
    * @param {object} [options]
    * @param {string} [options.image]         imagem base64 — ativa o modo visão
    * @param {string} [options.systemPrompt]  substitui o prompt do sistema
+   * @param {boolean} [options.semBase]       pula a busca na base de conhecimento
    * @param {number} [options.numPredict]
    */
   async function ask(question, handlers = {}, options = {}) {
@@ -111,11 +112,12 @@ function createChatSession() {
       aborter = null;
     }
 
-    // 1. Busca na base de conhecimento (não faz sentido no modo visão).
+    // 1. Busca na base de conhecimento (não faz sentido no modo visão, nem
+    //    quando o texto já vem pronto e classificado, como no resumo do dia).
     let context = '';
     let sources = [];
     const stats = kb.stats();
-    if (!image && settings.useKnowledgeBase && stats.chunks > 0) {
+    if (!image && !options.semBase && settings.useKnowledgeBase && stats.chunks > 0) {
       try {
         const built = await kb.buildContext(clean, {
           topK: settings.topK,

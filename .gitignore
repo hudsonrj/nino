@@ -4,6 +4,12 @@ vendor/piper/
 vendor/voices/
 vendor/sttenv/
 
+# Segredos. O cofre fica em ~/.config/nino/credenciais.json, fora do
+# repositório; estas linhas são só uma rede de segurança para quem apontar
+# NINO_CONFIG_DIR para dentro do projeto.
+credenciais.json
+.config/
+
 *.log
 .DS_Store
 

@@ -596,6 +596,56 @@
     if (buffer.trim()) handleLine(buffer.trim());
   }
 
+  /**
+   * Igual ao streamRequest, mas entrega cada mensagem NDJSON a um callback.
+   * Usado pela visão "Meu dia", que tem eventos próprios (triagem, token,
+   * rascunho) e não deve mexer nos ouvintes do chat.
+   */
+  async function streamNdjson(url, body, onMessage, signal) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+      signal,
+    });
+    if (!res.ok) {
+      let detalhe = '';
+      try {
+        detalhe = (await res.json()).error || '';
+      } catch {
+        /* sem JSON */
+      }
+      throw new Error(detalhe || `HTTP ${res.status}`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n')) >= 0) {
+        const linha = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (linha) {
+          try {
+            onMessage(JSON.parse(linha));
+          } catch {
+            /* linha incompleta: ignora */
+          }
+        }
+      }
+    }
+    if (buffer.trim()) {
+      try {
+        onMessage(JSON.parse(buffer.trim()));
+      } catch {
+        /* ignora */
+      }
+    }
+  }
+
   async function startChat(text) {
     if (chatAbort) chatAbort.abort();
     const controller = new AbortController();
@@ -900,6 +950,33 @@
         if (res && res.settings) ttsEnabled = !!res.settings.ttsEnabled;
         return res;
       },
+    },
+
+    /**
+     * Meu dia: o JEV decide sobre e-mail e agenda; o modelo local escreve.
+     * Nenhuma chamada aqui envia conteúdo ao JEV sem `aprovado: true`, que a
+     * interface só manda depois de mostrar a prévia ao usuário.
+     */
+    day: {
+      info: () => getJson('/api/agenda/info'),
+      eventos: () => getJson('/api/agenda/eventos'),
+      previa: (opcoes) => postJson('/api/agenda/previa', opcoes || {}),
+      triar: (opcoes) => postJson('/api/agenda/triar', { ...(opcoes || {}), aprovado: true }),
+      ultima: () => getJson('/api/agenda/ultima'),
+      enviar: (dados) => postJson('/api/agenda/enviar', dados),
+      credenciais: () => getJson('/api/credenciais'),
+      salvarCredenciais: (patch) => postJson('/api/credenciais', { patch }),
+      apagarCredenciais: async () => {
+        const res = await fetch('/api/credenciais', { method: 'DELETE' });
+        return res.json();
+      },
+      testarJev: () => postJson('/api/jev/teste', {}),
+      // Fluxos com streaming de tokens do modelo local.
+      resumo: (opcoes, onMessage) =>
+        streamNdjson('/api/agenda/resumo', { ...(opcoes || {}), aprovado: true }, onMessage),
+      rascunho: (opcoes, onMessage) => streamNdjson('/api/agenda/rascunho', opcoes, onMessage),
+      perguntar: (pergunta, onMessage) =>
+        streamNdjson('/api/agenda/perguntar', { pergunta }, onMessage),
     },
 
     system: {

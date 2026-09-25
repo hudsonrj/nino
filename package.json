@@ -7,7 +7,9 @@
     "start": "electron . --no-sandbox",
     "dev": "electron . --no-sandbox --enable-logging",
     "web": "node src/server/web.js",
-    "test": "node scripts/smoke-test.js"
+    "test": "node scripts/smoke-test.js",
+    "test:jev": "node scripts/test-jev.js",
+    "test:ui": "electron --no-sandbox scripts/ui-preview.js /tmp/nino-ui"
   },
   "author": "",
   "license": "MIT",

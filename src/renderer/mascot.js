@@ -219,6 +219,23 @@ function sendMessage(text) {
 
   if (!state.open) setOpen(true);
 
+  // Pergunta sobre o próprio dia ("o que tenho hoje?", "tem algo urgente?").
+  // Responde com a triagem que o usuário já aprovou — sem mandar nada novo
+  // para a nuvem. Não usa expressões regulares frouxas de propósito: disparar
+  // isso por engano custaria uma ida ao modelo local de 1 a 3 minutos.
+  if (api.day && state.settings && state.settings.jevEnabled && detectarIntencaoDeDia(clean)) {
+    el('input').value = '';
+    autoGrow();
+    addMessage('user', clean);
+    el('sources').classList.add('hidden');
+    state.botText = '';
+    state.botEl = addMessage('bot', '');
+    state.botEl.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>';
+    setBusy(true);
+    perguntarSobreODia(clean);
+    return;
+  }
+
   addMessage('user', clean);
   el('input').value = '';
   autoGrow();
@@ -739,6 +756,25 @@ async function loadSettings() {
   el('lblMaxTok').textContent = s.maxTokens;
   el('setPrompt').value = s.systemPrompt;
 
+  // --- JEV / e-mail / agenda ---
+  el('setJev').checked = !!s.jevEnabled;
+  const jevSel = el('setJevModel');
+  const modelos = (dia.info && dia.info.modelosJev) || ['jev-latest', 'jev-1.13'];
+  const alvo = s.jevModel || 'jev-latest';
+  const conjunto = new Set([...modelos, alvo]);
+  jevSel.innerHTML = [...conjunto]
+    .map((m) => `<option value="${m}"${m === alvo ? ' selected' : ''}>${m}</option>`)
+    .join('');
+  el('setJevConf').value = s.jevConfiancaMinima;
+  el('lblJevConf').textContent = Number(s.jevConfiancaMinima).toFixed(2).replace('.', ',');
+  el('setAgendaDias').value = s.agendaDias;
+  el('lblAgendaDias').textContent = s.agendaDias;
+  el('setAgendaMsgs').value = s.agendaMensagens;
+  el('lblAgendaMsgs').textContent = s.agendaMensagens;
+  el('setAgendaNaoLidos').checked = s.agendaSomenteNaoLidos !== false;
+  el('setAgendaCorpo').checked = s.agendaIncluirCorpo !== false;
+  await carregarCredenciais();
+
   paintVoiceToggle();
 }
 
@@ -755,6 +791,15 @@ function setupSettings() {
   });
   el('setMaxTok').addEventListener('input', (e) => {
     el('lblMaxTok').textContent = e.target.value;
+  });
+  el('setJevConf').addEventListener('input', (e) => {
+    el('lblJevConf').textContent = Number(e.target.value).toFixed(2).replace('.', ',');
+  });
+  el('setAgendaDias').addEventListener('input', (e) => {
+    el('lblAgendaDias').textContent = e.target.value;
+  });
+  el('setAgendaMsgs').addEventListener('input', (e) => {
+    el('lblAgendaMsgs').textContent = e.target.value;
   });
 
   if (el('setOutput')) {
@@ -790,6 +835,13 @@ function setupSettings() {
       numThread: Number(el('setThreads').value),
       maxTokens: Number(el('setMaxTok').value),
       systemPrompt: el('setPrompt').value,
+      jevEnabled: el('setJev').checked,
+      jevModel: el('setJevModel').value,
+      jevConfiancaMinima: Number(el('setJevConf').value),
+      agendaDias: Number(el('setAgendaDias').value),
+      agendaMensagens: Number(el('setAgendaMsgs').value),
+      agendaSomenteNaoLidos: el('setAgendaNaoLidos').checked,
+      agendaIncluirCorpo: el('setAgendaCorpo').checked,
     };
     const res = await api.settings.set(patch);
     state.settings = res.settings;
@@ -811,6 +863,7 @@ function setView(view) {
   state.view = view;
   for (const [name, btn, viewId] of [
     ['chat', el('btnChat'), 'viewChat'],
+    ['day', el('btnDay'), 'viewDay'],
     ['kb', el('btnKb'), 'viewKb'],
     ['settings', el('btnSettings'), 'viewSettings'],
   ]) {
@@ -819,11 +872,13 @@ function setView(view) {
     el(viewId).classList.toggle('active', active);
   }
   if (view === 'kb') loadKb();
+  if (view === 'day') carregarDia();
   if (view === 'settings') loadSettings();
 }
 
 function setupNav() {
   el('btnChat').addEventListener('click', () => setView('chat'));
+  el('btnDay').addEventListener('click', () => setView('day'));
   el('btnKb').addEventListener('click', () => setView('kb'));
   el('btnSettings').addEventListener('click', () => setView('settings'));
   el('btnHide').addEventListener('click', () => {
@@ -850,6 +905,7 @@ async function init() {
   setupVision();
   setupChatEvents();
   setupKb();
+  setupDay();
   setupSettings();
 
   const status = await api.system.status();
@@ -896,3 +952,650 @@ async function init() {
 }
 
 window.addEventListener('DOMContentLoaded', init);
+
+/* ================================================================== */
+/* MEU DIA — JEV decide, o modelo local escreve                        */
+/* ================================================================== */
+
+/** Apelido curto: assunto e remetente de e-mail são conteúdo alheio. */
+const esc = escapeHtml;
+
+/* ---- perguntas sobre o próprio dia, feitas no chat ---- */
+
+/**
+ * Reconhece pedidos sobre e-mail e agenda. Exige posse em primeira pessoa
+ * ("minha agenda", "meus e-mails") ou uma expressão fixa ("o que tenho hoje").
+ * Preferimos perder um caso a disparar à toa: um falso positivo aqui custa de
+ * 1 a 3 minutos do modelo local.
+ */
+const PADROES_DIA = [
+  /\b(minha|meu|meus|minhas)\s+(agenda|dia|e-?mails?|correio|caixa de entrada|compromissos?|reuni[õo]es?|inbox|mensagens)\b/i,
+  /\b(agenda|compromissos?|reuni[õo]es?)\s+(de|da|do|para)\s+(hoje|amanh[ãa]|esta semana|essa semana)\b/i,
+  /\bo que (eu )?(tenho|tem|marcado|tenho marcado)\s+(hoje|amanh[ãa]|na agenda|para hoje|marcado)\b/i,
+  /\b(resumo|resuma|como (est[áa]|vai))\s+(o\s+)?(meu\s+)?dia\b/i,
+  /\b(alguma coisa|algo|tem algo)\s+(urgente|importante)\b/i,
+  /\bo que chegou\b/i,
+  /\bpreciso responder (algum|alguma|algu[ée]m)\b/i,
+];
+
+function detectarIntencaoDeDia(texto) {
+  const t = String(texto || '').trim();
+  if (t.length < 4) return false;
+  // Perguntas conceituais não são sobre o dia do usuário.
+  if (/\b(o que (é|e|significa|quer dizer)|me explique|o que s[ãa]o)\b/i.test(t)) return false;
+  return PADROES_DIA.some((re) => re.test(t));
+}
+
+/** Responde sobre o dia usando a última triagem aprovada. */
+async function perguntarSobreODia(pergunta) {
+  try {
+    await api.day.perguntar(pergunta, (m) => {
+      if (m.type === 'token') {
+        state.botText += m.token;
+        if (state.botEl) {
+          state.botEl.innerHTML = `${renderMarkdown(state.botText)}<span class="caret"></span>`;
+        }
+      } else if (m.type === 'done') {
+        if (state.botEl) {
+          state.botEl.innerHTML = renderMarkdown(m.text || state.botText);
+        }
+        setBusy(false);
+        state.botEl = null;
+      } else if (m.type === 'error') {
+        if (state.botEl && !state.botText) state.botEl.remove();
+        state.botEl = null;
+        addMessage('error', m.error);
+        setBusy(false);
+      } else if (m.type === 'aborted') {
+        if (state.botEl) {
+          state.botEl.innerHTML = state.botText
+            ? `${renderMarkdown(state.botText)}<br><em style="color:#93a9b8">(interrompido)</em>`
+            : '<em style="color:#93a9b8">(interrompido)</em>';
+        }
+        state.botEl = null;
+        setBusy(false);
+      }
+    });
+  } catch (err) {
+    if (state.botEl && !state.botText) state.botEl.remove();
+    state.botEl = null;
+    addMessage('error', `Não consegui responder sobre o seu dia: ${err.message}`);
+    setBusy(false);
+  }
+}
+
+const dia = {
+  info: null,
+  triagem: null,
+  previa: null,
+  rascunhos: new Map(), // uid -> texto em edição
+  ocupado: false,
+};
+
+function diaStatus(texto, classe) {
+  const n = el('dayStatus');
+  n.textContent = texto;
+  n.className = `day-status${classe ? ` ${classe}` : ''}`;
+}
+
+/** Mostra o que falta configurar, com o motivo exato. */
+function renderFalta(info) {
+  const caixa = el('dayFalta');
+  const faltas = [];
+  const c = (info && info.credenciais) || {};
+  if (!c.typesafe || !c.typesafe.configurado) {
+    faltas.push(
+      'A <b>chave da TypeSafe</b> (o JEV) não está configurada. Crie uma em ' +
+        'console.typesafe.ai/keys e cole em Ajustes.'
+    );
+  }
+  if (!c.google || !c.google.configurado) {
+    faltas.push(
+      'O <b>Gmail</b> não está configurado. Informe seu e-mail e uma ' +
+        '<b>senha de app</b> em Ajustes.'
+    );
+  }
+  if (!c.google || !c.google.agenda) {
+    faltas.push(
+      'A <b>agenda</b> não está configurada. Cole o endereço secreto do iCal ' +
+        'em Ajustes.'
+    );
+  }
+  if (!faltas.length) {
+    caixa.classList.add('hidden');
+    caixa.innerHTML = '';
+    return;
+  }
+  caixa.classList.remove('hidden');
+  caixa.innerHTML =
+    'Falta configurar:<br>' + faltas.map((f) => `• ${f}`).join('<br>');
+}
+
+async function carregarDia() {
+  if (!api.day) {
+    diaStatus('A visão "Meu dia" só funciona no modo web (navegador).', 'erro');
+    return;
+  }
+  try {
+    dia.info = await api.day.info();
+    renderFalta(dia.info);
+    if (!dia.info.credenciais.typesafe.configurado) {
+      diaStatus('Falta a chave do JEV para eu poder triar seu dia.');
+    } else if (dia.triagem) {
+      // já temos uma triagem: mantém o resultado na tela
+    } else {
+      const est = dia.info.estatisticas;
+      diaStatus(
+        `Pronto. Configurei ${est.chamadas} chamada(s) ao JEV até agora, ` +
+          `US$ ${Number(est.custoUSD).toFixed(6)}.`
+      );
+    }
+  } catch (err) {
+    diaStatus(`Não consegui verificar a configuração: ${err.message}`, 'erro');
+  }
+}
+
+/** Passo 1: buscar e-mail e agenda e MOSTRAR o que sairia da máquina. */
+async function pedirPrevia() {
+  if (dia.ocupado) return;
+  if (!api.day) return;
+  dia.ocupado = true;
+  el('btnDayResumo').disabled = true;
+  el('dayPreview').classList.add('hidden');
+  el('dayResultado').innerHTML = '';
+  diaStatus('Lendo seu e-mail e sua agenda…', 'trabalhando');
+  try {
+    const p = await api.day.previa({});
+    if (!p.ok) {
+      diaStatus(
+        p.avisos && p.avisos.length ? p.avisos.join(' · ') : 'Não há nada para triar.',
+        'erro'
+      );
+      if (p.avisos && p.avisos.length) {
+        el('dayFalta').classList.remove('hidden');
+        el('dayFalta').innerHTML = p.avisos.map((a) => `• ${esc(a)}`).join('<br>');
+      }
+      return;
+    }
+    dia.previa = p;
+    el('dayPreviewTexto').textContent = p.resumo;
+    el('dayPreviewCusto').textContent =
+      `${p.quantidadePerguntas} perguntas · ~${p.tokensAproximados} tokens · ` +
+      `≈ US$ ${Number(p.custoEstimadoUSD).toFixed(6)}`;
+    el('dayPreview').classList.remove('hidden');
+    diaStatus(
+      `Li ${p.mensagens.length} mensagem(ns) e ${p.eventos.length} compromisso(s). ` +
+        'Confira o que sairia da sua máquina e aprove.'
+    );
+  } catch (err) {
+    diaStatus(`Falhou: ${err.message}`, 'erro');
+  } finally {
+    dia.ocupado = false;
+    el('btnDayResumo').disabled = false;
+  }
+}
+
+/** Passo 2 (só após aprovação): o JEV decide. */
+async function aprovarETriar() {
+  if (dia.ocupado) return;
+  dia.ocupado = true;
+  el('btnDayAprovar').disabled = true;
+  el('dayPreview').classList.add('hidden');
+  diaStatus('O JEV está decidindo…', 'trabalhando');
+  try {
+    const t = await api.day.triar({});
+    if (!t.ok) {
+      diaStatus(t.erro || 'A triagem falhou.', 'erro');
+      return;
+    }
+    dia.triagem = t;
+    renderDia(t);
+    diaStatus(
+      `Pronto em ${(t.ms / 1000).toFixed(1)}s — US$ ${Number(t.custoUSD).toFixed(6)}. ` +
+        `${t.filaDoDia.length} para hoje, ${t.revisar.length} incerta(s), ` +
+        `${t.ruido.length} descartável(is).`,
+      'ok'
+    );
+  } catch (err) {
+    diaStatus(`Falhou: ${err.message}`, 'erro');
+  } finally {
+    dia.ocupado = false;
+    el('btnDayAprovar').disabled = false;
+  }
+}
+
+function cartaoMensagem(m, opcoes) {
+  const { comRascunho = false } = opcoes || {};
+  const tags = [
+    `<span class="tag">${esc(m.tipoRotulo)}</span>`,
+    `<span class="tag ${/urgente/.test(m.urgenciaRotulo) ? 'quente' : 'frio'}">${esc(
+      m.urgenciaRotulo
+    )}</span>`,
+    m.precisaEscrever ? '<span class="tag ok">pede resposta sua</span>' : '',
+    m.confianca != null
+      ? `<span class="tag conf">JEV ${Math.round(m.confianca * 100)}%</span>`
+      : '',
+    m.anexos && m.anexos.length
+      ? `<span class="tag">📎 ${esc(m.anexos.join(', '))}</span>`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('');
+
+  const rascunho = dia.rascunhos.get(m.uid);
+  const caixaRascunho = rascunho !== undefined
+    ? `<div class="rascunho" data-uid="${esc(m.uid)}">
+         <div class="ras-top"><span>Rascunho do modelo local</span><span>revise antes de enviar</span></div>
+         <textarea data-ras="${esc(m.uid)}">${esc(rascunho)}</textarea>
+         <div class="ras-acoes">
+           <button class="ghost-btn" data-ras-copiar="${esc(m.uid)}">Copiar</button>
+           <button class="primary-btn" data-ras-enviar="${esc(m.uid)}">Enviar resposta</button>
+         </div>
+         <div class="aviso-janela">O envio é definitivo: vai sair da sua conta
+           ${esc((dia.info && dia.info.credenciais.google.email) || '')} para
+           ${esc(m.enderecoDe)}.</div>
+       </div>`
+    : '';
+
+  return `<div class="msg-card">
+    <div class="msg-card-top">
+      <span class="msg-card-de">${esc(m.de)}</span>
+      <span class="msg-card-data">${esc((m.data || '').slice(0, 31))}</span>
+    </div>
+    <div class="msg-card-assunto">${esc(m.assunto)}</div>
+    <div class="msg-card-tags">${tags}</div>
+    ${
+      comRascunho
+        ? `<div class="msg-card-acoes">
+             <button class="ghost-btn" data-rascunhar="${esc(m.uid)}">✍️ Rascunhar resposta</button>
+             <button class="ghost-btn" data-abrir="${esc(m.uid)}">👁 Ver mensagem</button>
+           </div>`
+        : ''
+    }
+    ${caixaRascunho}
+  </div>`;
+}
+
+function cartaoEvento(e) {
+  return `<div class="evento-card">
+    <div class="msg-card-top">
+      <span class="ev-hora">${esc(e.day)} · ${esc(e.time)}</span>
+      <span class="msg-card-data">${e.essencial ? 'não perder' : ''}</span>
+    </div>
+    <div class="ev-titulo">${esc(e.title)}</div>
+    ${e.location ? `<div class="ev-local">📍 ${esc(e.location)}</div>` : ''}
+    <div class="msg-card-tags">
+      <span class="tag">${esc(e.preparoRotulo)}</span>
+      ${e.repeats ? '<span class="tag">repete</span>' : ''}
+      ${
+        e.confianca != null
+          ? `<span class="tag conf">JEV ${Math.round(e.confianca * 100)}%</span>`
+          : ''
+      }
+    </div>
+  </div>`;
+}
+
+function grupo(titulo, itens, classe, vazio) {
+  if (!itens.length) return vazio ? '' : '';
+  return `<div class="dia-grupo ${classe || ''}">
+    <h4>${esc(titulo)} <span class="conta">${itens.length}</span></h4>
+    ${itens.join('')}
+  </div>`;
+}
+
+function renderDia(t) {
+  const partes = [];
+
+  if (t.eventos.length) {
+    partes.push(
+      grupo('Agenda', t.eventos.slice(0, 12).map(cartaoEvento), '')
+    );
+  }
+  if (t.filaDoDia.length) {
+    partes.push(
+      grupo(
+        'Responder hoje',
+        t.filaDoDia.map((m) => cartaoMensagem(m, { comRascunho: true })),
+        'hoje'
+      )
+    );
+  }
+  if (t.daSemana.length) {
+    partes.push(
+      grupo('Responder nesta semana', t.daSemana.map((m) => cartaoMensagem(m, { comRascunho: true })))
+    );
+  }
+  if (t.revisar.length) {
+    partes.push(
+      grupo(
+        'O JEV não teve certeza — decida você',
+        t.revisar.map((m) => cartaoMensagem(m, { comRascunho: true })),
+        'incerto'
+      )
+    );
+  }
+  if (t.ruido.length) {
+    partes.push(
+      grupo(
+        'Pode descartar sem ler',
+        t.ruido.map((m) => cartaoMensagem(m)),
+        ''
+      )
+    );
+  }
+  if (!partes.length) {
+    partes.push('<p class="vazio">Nada pendente. Caixa limpa e agenda livre.</p>');
+  }
+
+  el('dayResultado').innerHTML = partes.join('');
+}
+
+/** Escreve um rascunho de resposta com o modelo local, em streaming. */
+async function rascunharResposta(uid) {
+  if (dia.ocupado) return;
+  dia.ocupado = true;
+  dia.rascunhos.set(uid, '');
+  renderDia(dia.triagem);
+  diaStatus('Escrevendo o rascunho… (o modelo local leva de 1 a 3 minutos)', 'trabalhando');
+
+  try {
+    await api.day.rascunho({ uid }, (m) => {
+      if (m.type === 'token') {
+        dia.rascunhos.set(uid, m.full);
+        const area = document.querySelector(`textarea[data-ras="${uid}"]`);
+        if (area) {
+          area.value = m.full;
+          area.scrollTop = area.scrollHeight;
+        }
+      } else if (m.type === 'done') {
+        dia.rascunhos.set(uid, m.text || m.full || '');
+        diaStatus('Rascunho pronto. Revise e envie quando quiser.', 'ok');
+      } else if (m.type === 'error') {
+        diaStatus(`Ao escrever: ${m.error}`, 'erro');
+        dia.rascunhos.delete(uid);
+        renderDia(dia.triagem);
+      }
+    });
+  } catch (err) {
+    diaStatus(`Falhou ao escrever: ${err.message}`, 'erro');
+    dia.rascunhos.delete(uid);
+    renderDia(dia.triagem);
+  } finally {
+    dia.ocupado = false;
+  }
+}
+
+/** Envio em dois toques: o segundo confirma de verdade. */
+async function enviarResposta(uid, botao) {
+  const area = document.querySelector(`textarea[data-ras="${uid}"]`);
+  const texto = area ? area.value.trim() : (dia.rascunhos.get(uid) || '').trim();
+  if (!texto) {
+    diaStatus('O rascunho está vazio.', 'erro');
+    return;
+  }
+  if (botao.dataset.confirmado !== 'sim') {
+    botao.dataset.confirmado = 'sim';
+    botao.textContent = 'Confirmar envio';
+    setTimeout(() => {
+      if (botao.dataset.confirmado === 'sim') {
+        botao.dataset.confirmado = 'nao';
+        botao.textContent = 'Enviar resposta';
+      }
+    }, 6000);
+    return;
+  }
+
+  botao.disabled = true;
+  diaStatus('Enviando…', 'trabalhando');
+  try {
+    const r = await api.day.enviar({ uid, texto, confirmado: true });
+    if (r.ok) {
+      diaStatus('Resposta enviada. ✓', 'ok');
+      dia.rascunhos.delete(uid);
+      dia.triagem.mensagens = dia.triagem.mensagens.filter((m) => String(m.uid) !== String(uid));
+      dia.triagem.filaDoDia = dia.triagem.filaDoDia.filter((m) => String(m.uid) !== String(uid));
+      dia.triagem.daSemana = dia.triagem.daSemana.filter((m) => String(m.uid) !== String(uid));
+      dia.triagem.revisar = dia.triagem.revisar.filter((m) => String(m.uid) !== String(uid));
+      renderDia(dia.triagem);
+    } else {
+      diaStatus(`O Gmail recusou: ${r.erro}`, 'erro');
+      botao.disabled = false;
+    }
+  } catch (err) {
+    diaStatus(`Falha no envio: ${err.message}`, 'erro');
+    botao.disabled = false;
+  }
+}
+
+/** Resumo falado: triagem + modelo local, com a voz de sempre. */
+async function resumoFalado() {
+  if (dia.ocupado) return;
+  dia.ocupado = true;
+  el('btnDayResumo').disabled = true;
+  el('dayPreview').classList.add('hidden');
+  el('dayResultado').innerHTML = '';
+  diaStatus('O JEV está classificando; depois o modelo local escreve…', 'trabalhando');
+
+  let completo = '';
+  // Abre a bolha antes de escrever: o usuário acompanha o texto aparecendo,
+  // igual a uma conversa normal.
+  state.botEl = addMessage('bot', '');
+  try {
+    await api.day.resumo({}, (m) => {
+      if (m.type === 'triagem') {
+        diaStatus(
+          `JEV decidiu em ${(m.ms / 1000).toFixed(1)}s: ` +
+            `${m.contagens.hoje} hoje, ${m.contagens.semana} na semana, ` +
+            `${m.contagens.incerto} incertas. Agora o Nino está escrevendo…`,
+          'trabalhando'
+        );
+      } else if (m.type === 'token') {
+        completo = m.full;
+        if (state.botEl) state.botEl.innerHTML = renderMarkdown(completo);
+        const lista = el('messages');
+        if (lista) lista.scrollTop = lista.scrollHeight;
+        diaStatus(`Escrevendo… ${completo.length} caracteres`, 'trabalhando');
+      } else if (m.type === 'done') {
+        completo = m.text || completo;
+        if (state.botEl) state.botEl.innerHTML = renderMarkdown(completo);
+        dia.triagem = m.triagem || dia.triagem;
+        renderDia(dia.triagem);
+        diaStatus('Resumo pronto.', 'ok');
+        if (api.voice && api.voice.speak) api.voice.speak(completo);
+      } else if (m.type === 'error') {
+        diaStatus(`Erro: ${m.error}`, 'erro');
+        if (state.botEl && !completo) state.botEl.remove();
+      } else if (m.type === 'aborted') {
+        diaStatus('Interrompido.', '');
+      } else if (m.erro || m.ok === false) {
+        // Resposta não-streamada (ex.: JEV desligado ou triagem falhou).
+        diaStatus(m.erro || 'Não consegui fazer o resumo.', 'erro');
+        if (state.botEl && !completo) state.botEl.remove();
+      }
+    });
+  } catch (err) {
+    diaStatus(`Falhou: ${err.message}`, 'erro');
+    if (state.botEl && !completo) state.botEl.remove();
+  } finally {
+    dia.ocupado = false;
+    el('btnDayResumo').disabled = false;
+  }
+}
+
+/* ---- credenciais ---- */
+
+async function carregarCredenciais() {
+  if (!api.day) return;
+  try {
+    const r = await api.day.credenciais();
+    const c = r.credenciais;
+    el('credCaminho').textContent = c.arquivo;
+    el('jevKeyDica').textContent = c.typesafe.configurado
+      ? `Já configurada: ${c.typesafe.dica} (deixe em branco para manter)`
+      : 'Nada configurado ainda.';
+    el('setGmailUser').value = c.google.email || '';
+    el('setIcalUrl').value = c.google.agenda ? '••••••• (já configurado)' : '';
+    el('setIcalUrl').dataset.configurado = c.google.agenda ? 'sim' : 'nao';
+    el('setGmailPass').placeholder = c.google.senhaApp
+      ? '••••••••  (já configurada — deixe em branco para manter)'
+      : '16 letras, sem os espaços';
+
+    const e = el('jevEstado');
+    const linhas = [
+      `JEV: ${c.typesafe.configurado ? '✓ chave configurada' : '— sem chave'}`,
+      `Gmail: ${c.google.configurado ? `✓ ${esc(c.google.email)}` : '— não configurado'}`,
+      `Agenda: ${c.google.agenda ? '✓ endereço configurado' : '— não configurada'}`,
+    ];
+    e.innerHTML = linhas.map((l) => `<div class="cred-linha">${l}</div>`).join('');
+  } catch (err) {
+    el('credMsg').textContent = `Não consegui ler as credenciais: ${err.message}`;
+  }
+}
+
+async function salvarCredenciais() {
+  const patch = { typesafe: {}, google: {} };
+  const chave = el('setJevKey').value.trim();
+  if (chave) patch.typesafe.apiKey = chave;
+
+  const email = el('setGmailUser').value.trim();
+  if (email) patch.google.email = email;
+  const senha = el('setGmailPass').value.trim();
+  if (senha) patch.google.appPassword = senha;
+  const ical = el('setIcalUrl').value.trim();
+  if (ical && !ical.startsWith('•')) patch.google.icalUrl = ical;
+
+  el('credMsg').style.color = '#93a9b8';
+  el('credMsg').textContent = 'Salvando e testando as conexões…';
+
+  try {
+    const r = await api.day.salvarCredenciais(patch);
+    const falhas = [];
+    if (r.jev && !r.jev.ok && r.jev.motivo !== 'sem_chave') {
+      falhas.push(`JEV: ${r.jev.erro || r.jev.motivo}`);
+    }
+    if (r.email && !r.email.ok) falhas.push(`Gmail: ${r.email.erro}`);
+    if (r.agenda && !r.agenda.ok) falhas.push(`Agenda: ${r.agenda.erro}`);
+
+    el('setJevKey').value = '';
+    el('setGmailPass').value = '';
+    await carregarCredenciais();
+    await carregarDia();
+
+    if (falhas.length) {
+      el('credMsg').style.color = '#ff9fb0';
+      el('credMsg').textContent = falhas.join(' · ');
+    } else {
+      el('credMsg').style.color = '#4ade80';
+      el('credMsg').textContent = 'Credenciais salvas e conexões testadas. ✓';
+    }
+  } catch (err) {
+    el('credMsg').style.color = '#ff9fb0';
+    el('credMsg').textContent = `Falhou: ${err.message}`;
+  }
+}
+
+async function apagarCredenciais(botao) {
+  if (botao.dataset.confirmado !== 'sim') {
+    botao.dataset.confirmado = 'sim';
+    botao.textContent = 'Confirmar: apagar tudo';
+    setTimeout(() => {
+      if (botao.dataset.confirmado === 'sim') {
+        botao.dataset.confirmado = 'nao';
+        botao.textContent = 'Apagar credenciais';
+      }
+    }, 6000);
+    return;
+  }
+  await api.day.apagarCredenciais();
+  botao.dataset.confirmado = 'nao';
+  botao.textContent = 'Apagar credenciais';
+  el('credMsg').style.color = '#93a9b8';
+  el('credMsg').textContent = 'Credenciais apagadas do disco.';
+  await carregarCredenciais();
+  await carregarDia();
+}
+
+async function testarJev() {
+  const saida = el('jevTesteSaida');
+  saida.style.color = '#93a9b8';
+  saida.textContent = 'Fazendo uma chamada real ao JEV…';
+  try {
+    const r = await api.day.testarJev();
+    if (!r.ok) {
+      saida.style.color = '#ff9fb0';
+      saida.textContent = r.erro;
+      return;
+    }
+    const a = r.respostas;
+    saida.style.color = '#4ade80';
+    saida.innerHTML =
+      `O JEV respondeu em <b>${(r.ms / 1000).toFixed(2)}s</b> por ` +
+      `<b>US$ ${Number(r.custoUSD).toFixed(6)}</b>:<br>` +
+      `• força do lead: <b>${esc(String(a.forca_do_lead.rotulo || a.forca_do_lead.valor))}</b>` +
+      (a.forca_do_lead.confianca != null
+        ? ` (confiança ${Math.round(a.forca_do_lead.confianca * 100)}%)`
+        : '') +
+      `<br>• tipo: <b>${esc(a.tipo.valor)}</b><br>` +
+      `• precisa de resposta pessoal: <b>${Math.round(
+        (a.resposta_pessoal.probabilidade || 0) * 100
+      )}%</b> de chance`;
+  } catch (err) {
+    saida.style.color = '#ff9fb0';
+    saida.textContent = `Falhou: ${err.message}`;
+  }
+}
+
+function setupDay() {
+  if (!api.day) return;
+
+  // Os cartões são criados dinamicamente: um ouvinte só, na raiz.
+  el('dayResultado').addEventListener('click', (ev) => {
+    const alvo = ev.target.closest('button');
+    if (!alvo) return;
+    const rascunhar = alvo.getAttribute('data-rascunhar');
+    if (rascunhar) return void rascunharResposta(rascunhar);
+    const enviar = alvo.getAttribute('data-ras-enviar');
+    if (enviar) return void enviarResposta(enviar, alvo);
+    const copiar = alvo.getAttribute('data-ras-copiar');
+    if (copiar) {
+      const area = document.querySelector(`textarea[data-ras="${copiar}"]`);
+      if (area) {
+        navigator.clipboard.writeText(area.value).then(
+          () => diaStatus('Rascunho copiado. ✓', 'ok'),
+          () => diaStatus('Não consegui copiar.', 'erro')
+        );
+      }
+      return;
+    }
+    const abrir = alvo.getAttribute('data-abrir');
+    if (abrir && dia.triagem) {
+      const m = dia.triagem.mensagens.find((x) => String(x.uid) === String(abrir));
+      if (m) {
+        const trecho = (m.trecho || '(corpo não carregado)').slice(0, 1200);
+        addMessage('bot', `De ${m.de} — ${m.assunto}:\n\n${trecho}`);
+        setView('chat');
+      }
+    }
+  });
+
+  el('btnDayResumo').addEventListener('click', pedirPrevia);
+  el('btnDayRecarregar').addEventListener('click', () => {
+    dia.triagem = null;
+    dia.rascunhos.clear();
+    el('dayResultado').innerHTML = '';
+    carregarDia();
+  });
+  el('btnDayAprovar').addEventListener('click', aprovarETriar);
+  el('btnDayCancelar').addEventListener('click', () => {
+    el('dayPreview').classList.add('hidden');
+    diaStatus('Envio ao JEV cancelado. Nada saiu da sua máquina.');
+  });
+
+  const salvarCred = el('btnSalvarCredenciais');
+  if (salvarCred) salvarCred.addEventListener('click', salvarCredenciais);
+  const apagarCred = el('btnApagarCredenciais');
+  if (apagarCred) apagarCred.addEventListener('click', () => apagarCredenciais(apagarCred));
+  const testar = el('btnJevTeste');
+  if (testar) testar.addEventListener('click', testarJev);
+}

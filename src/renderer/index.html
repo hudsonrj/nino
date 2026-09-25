@@ -23,6 +23,7 @@
       </div>
       <nav class="head-actions">
         <button id="btnChat" class="icon-btn active" title="Conversa">💬</button>
+        <button id="btnDay" class="icon-btn" title="Meu dia: e-mail e agenda">🌤️</button>
         <button id="btnKb" class="icon-btn" title="Base de conhecimento">📚</button>
         <button id="btnSettings" class="icon-btn" title="Ajustes">⚙️</button>
         <button id="btnHide" class="icon-btn" title="Esconder">✕</button>
@@ -47,6 +48,38 @@
         <span id="hintText">Enter envia · Shift+Enter quebra linha · arraste arquivos aqui</span>
         <button id="btnSpeakToggle" class="chip" title="Ligar/desligar a voz">🔊 voz</button>
       </div>
+    </div>
+
+    <!-- --------------------------- VIEW: MEU DIA ------------------------- -->
+    <div id="viewDay" class="view">
+      <div class="day-top">
+        <button id="btnDayResumo" class="primary-btn">Fazer o resumo do dia</button>
+        <button id="btnDayRecarregar" class="ghost-btn" title="Recarregar e-mail e agenda">↻</button>
+      </div>
+
+      <p class="day-status" id="dayStatus">Ainda não olhei seu dia.</p>
+
+      <div id="dayFalta" class="day-falta hidden"></div>
+
+      <!-- Prévia: mostra exatamente o que sairia da máquina antes de enviar -->
+      <div id="dayPreview" class="day-preview hidden">
+        <div class="day-preview-head">
+          <strong>O que vai sair da sua máquina</strong>
+          <span id="dayPreviewCusto" class="chip"></span>
+        </div>
+        <pre id="dayPreviewTexto" class="day-preview-texto"></pre>
+        <p class="kb-note">
+          O JEV roda na nuvem da TypeSafe. Nada é enviado sem você aprovar aqui.
+          Os e-mails saem da máquina; as respostas continuam sendo escritas pelo
+          modelo local.
+        </p>
+        <div class="day-preview-acoes">
+          <button id="btnDayAprovar" class="primary-btn">Aprovar e enviar ao JEV</button>
+          <button id="btnDayCancelar" class="ghost-btn">Cancelar</button>
+        </div>
+      </div>
+
+      <div id="dayResultado" class="day-resultado"></div>
     </div>
 
     <!-- --------------------- VIEW: BASE DE CONHECIMENTO ------------------ -->
@@ -140,6 +173,89 @@
         <span>Personalidade (prompt do sistema)</span>
         <textarea id="setPrompt" rows="6"></textarea>
       </label>
+
+      <!-- ---------------------- JEV, E-MAIL E AGENDA ---------------------- -->
+      <div class="sep"><span>JEV, e-mail e agenda</span></div>
+
+      <label class="field check">
+        <input type="checkbox" id="setJev" />
+        <span>Usar o JEV para triar meu e-mail e minha agenda</span>
+      </label>
+      <p class="kb-note">
+        O JEV decide em ~0,3 s o que merece atenção; o modelo local, que leva
+        minutos, só escreve o que sobra. <b>Desligado por padrão</b>: com ele
+        ligado, o texto dos seus e-mails sai da máquina rumo à nuvem da TypeSafe.
+      </p>
+
+      <div id="jevEstado" class="cred-estado"></div>
+
+      <label class="field">
+        <span>Chave da TypeSafe (JEV)</span>
+        <input type="password" id="setJevKey" placeholder="cole aqui a chave de console.typesafe.ai/keys" />
+        <small class="kb-note" id="jevKeyDica"></small>
+      </label>
+      <label class="field">
+        <span>Modelo do JEV</span>
+        <select id="setJevModel"></select>
+      </label>
+      <label class="field range">
+        <span>Confiança mínima para o JEV decidir sozinho <b id="lblJevConf">0,60</b></span>
+        <input type="range" id="setJevConf" min="0.3" max="0.95" step="0.05" />
+        <small class="kb-note">
+          Abaixo disso o item vai para a pilha "incerto" e você julga. O JEV diz
+          o quê; a confiança diz se dá para agir sem conferir.
+        </small>
+      </label>
+      <button type="button" id="btnJevTeste" class="ghost-btn">⚡ Testar o JEV agora (uma chamada real)</button>
+      <p class="kb-note" id="jevTesteSaida"></p>
+
+      <label class="field">
+        <span>Seu e-mail do Gmail</span>
+        <input type="text" id="setGmailUser" placeholder="voce@gmail.com" autocomplete="off" />
+      </label>
+      <label class="field">
+        <span>Senha de app do Gmail</span>
+        <input type="password" id="setGmailPass" placeholder="16 letras, sem os espaços" autocomplete="off" />
+        <small class="kb-note">
+          Não é a sua senha normal. Crie em
+          <b>myaccount.google.com/apppasswords</b> (exige verificação em duas etapas).
+        </small>
+      </label>
+      <label class="field">
+        <span>Endereço secreto da agenda (iCal)</span>
+        <input type="text" id="setIcalUrl" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics" />
+        <small class="kb-note">
+          No Google Agenda: Ajustes → escolha a agenda → <b>Endereço secreto no
+          formato iCal</b>. É só leitura, e não precisa de senha.
+        </small>
+      </label>
+      <label class="field range">
+        <span>Dias de agenda no resumo <b id="lblAgendaDias">2</b></span>
+        <input type="range" id="setAgendaDias" min="1" max="14" step="1" />
+      </label>
+      <label class="field range">
+        <span>Mensagens por triagem <b id="lblAgendaMsgs">12</b></span>
+        <input type="range" id="setAgendaMsgs" min="5" max="40" step="1" />
+      </label>
+      <label class="field check">
+        <input type="checkbox" id="setAgendaNaoLidos" />
+        <span>Só mensagens não lidas</span>
+      </label>
+      <label class="field check">
+        <input type="checkbox" id="setAgendaCorpo" />
+        <span>Enviar o corpo dos e-mails ao JEV (triagem bem melhor; sai mais conteúdo)</span>
+      </label>
+
+      <div class="settings-foot">
+        <button id="btnSalvarCredenciais" class="primary-btn">Salvar credenciais</button>
+        <button id="btnApagarCredenciais" class="ghost-btn danger">Apagar credenciais</button>
+      </div>
+      <p class="kb-note">
+        As credenciais ficam em <code id="credCaminho">~/.config/nino/credenciais.json</code>,
+        fora do repositório e com permissão só para você. Nada é enviado a lugar nenhum.
+      </p>
+      <p class="kb-note" id="credMsg"></p>
+
       <div class="settings-foot">
         <button id="btnSaveSettings" class="primary-btn">Salvar</button>
         <button id="btnOpenData" class="ghost-btn">Abrir pasta de dados</button>

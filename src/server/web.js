@@ -25,6 +25,11 @@ const tts = require('../main/tts');
 const stt = require('../main/stt');
 const { createChatSession } = require('../main/chat');
 const { SUPPORTED_EXTENSIONS } = require('../main/ingest/extract');
+const credentials = require('../main/credentials');
+const jev = require('../main/jev');
+const mailbox = require('../main/mailbox');
+const calendar = require('../main/calendar');
+const agenda = require('../main/agenda');
 
 const RENDERER = path.join(config.ROOT, 'src', 'renderer');
 const UPLOADS = path.join(config.DATA_DIR, 'uploads');
@@ -339,6 +344,424 @@ async function handleTts(req, res) {
   res.end(wav);
 }
 
+/* ------------------------------------------------------------------ */
+/* JEV, e-mail e agenda                                                */
+/* ------------------------------------------------------------------ */
+
+/** Última triagem, para o painel poder responder perguntas sobre ela. */
+let ultimaTriagem = null;
+
+function opcoesDaAgenda(corpo, settings) {
+  return {
+    dias: Number(corpo.dias) || settings.agendaDias,
+    limiteMensagens: Number(corpo.limiteMensagens) || settings.agendaMensagens,
+    somenteNaoLidos:
+      corpo.somenteNaoLidos === undefined
+        ? settings.agendaSomenteNaoLidos
+        : Boolean(corpo.somenteNaoLidos),
+    incluirCorpo:
+      corpo.incluirCorpo === undefined
+        ? settings.agendaIncluirCorpo
+        : Boolean(corpo.incluirCorpo),
+    confiancaMinima: settings.jevConfiancaMinima,
+  };
+}
+
+/** Estado das credenciais. Nunca devolve o valor dos segredos. */
+async function handleCredenciaisGet(res) {
+  const st = credentials.status();
+  const jevStatus = st.typesafe.configurado ? await jev.disponivel() : { ok: false, motivo: 'sem_chave' };
+  sendJson(res, 200, {
+    ok: true,
+    credenciais: st,
+    jev: jevStatus,
+    modeloJev: config.loadSettings().jevModel,
+    estatisticas: jev.estatisticas(),
+  });
+}
+
+/**
+ * Grava credenciais. Depois de gravar, já testa a conexão e devolve o
+ * resultado — assim o usuário sabe na hora se colou a senha certa, em vez
+ * de descobrir só quando a triagem falhar.
+ */
+async function handleCredenciaisPost(req, res) {
+  const { patch } = await readJson(req);
+  credentials.gravar(patch || {});
+  const st = credentials.status();
+
+  const resultado = { ok: true, credenciais: st };
+  if (st.typesafe.configurado) {
+    resultado.jev = await jev.disponivel();
+  }
+  if (st.google.email && st.google.senhaApp) {
+    resultado.email = await mailbox.ping();
+  }
+  if (st.google.agenda) {
+    const r = await calendar.buscar({ url: credentials.google().icalUrl, dias: 1, max: 1 });
+    resultado.agenda = r.ok
+      ? { ok: true, mensagem: 'Agenda lida com sucesso.' }
+      : { ok: false, erro: r.erro };
+  }
+  resultado.estatisticas = jev.estatisticas();
+  sendJson(res, 200, resultado);
+}
+
+/** Apaga as credenciais do disco. */
+async function handleCredenciaisDelete(res) {
+  credentials.apagar();
+  sendJson(res, 200, { ok: true, credenciais: credentials.status() });
+}
+
+/** Teste real do JEV, como o guia pede: e-mail inventado, três perguntas. */
+async function handleJevTeste(res) {
+  try {
+    sendJson(res, 200, await jev.teste());
+  } catch (err) {
+    sendJson(res, 200, { ok: false, erro: err.message });
+  }
+}
+
+async function handleAgendaPrevia(req, res) {
+  const settings = config.loadSettings();
+  const corpo = await readJson(req).catch(() => ({}));
+  const opcoes = opcoesDaAgenda(corpo, settings);
+  try {
+    const p = await agenda.previaComCache(opcoes, Boolean(corpo.forcar));
+    sendJson(res, 200, {
+      ok: p.ok,
+      doCache: Boolean(p.doCache),
+      resumo: p.resumo,
+      quantidadePerguntas: p.quantidadePerguntas,
+      caracteres: p.caracteres,
+      tokensAproximados: p.tokensAproximados,
+      custoEstimadoUSD: p.custoEstimadoUSD,
+      avisos: p.avisos,
+      eventos: p.planos,
+      mensagens: p.dados.mensagens.map((m) => ({
+        uid: m.uid,
+        de: m.de,
+        assunto: m.assunto,
+        data: m.data,
+        naoLido: m.naoLido,
+        temCorpo: Boolean(m.trecho),
+        caracteresCorpo: (m.trecho || '').length,
+      })),
+    });
+  } catch (err) {
+    sendJson(res, 200, { ok: false, erro: err.message, avisos: [] });
+  }
+}
+
+async function handleAgendaTriar(req, res) {
+  const settings = config.loadSettings();
+  if (!settings.jevEnabled) {
+    sendJson(res, 200, {
+      ok: false,
+      erro: 'O JEV está desligado. Ligue-o no painel para triar com ele.',
+    });
+    return;
+  }
+  const corpo = await readJson(req).catch(() => ({}));
+  if (corpo.aprovado !== true) {
+    // Trava de segurança: a triagem manda o conteúdo do usuário para a
+    // nuvem, então exige uma aprovação explícita da prévia.
+    sendJson(res, 200, {
+      ok: false,
+      erro: 'É preciso aprovar a prévia antes de enviar qualquer coisa ao JEV.',
+      precisaAprovacao: true,
+    });
+    return;
+  }
+  try {
+    const t = await agenda.triar(opcoesDaAgenda(corpo, settings));
+    if (t.ok) ultimaTriagem = t;
+    sendJson(res, 200, t);
+  } catch (err) {
+    sendJson(res, 200, { ok: false, erro: err.message });
+  }
+}
+
+/** Só a agenda, sem e-mail e sem JEV. */
+async function handleAgendaEventos(res) {
+  const settings = config.loadSettings();
+  const r = await calendar.buscar({
+    url: credentials.google().icalUrl,
+    dias: settings.agendaDias,
+    max: 40,
+  });
+  sendJson(res, 200, r);
+}
+
+/**
+ * Resumo do dia falado: o JEV classifica e o modelo local escreve. Reusa o
+ * mesmo fluxo de tokens do chat, então a interface não precisa de caso
+ * especial para falar e legendar.
+ */
+async function handleAgendaResumo(req, res) {
+  const settings = config.loadSettings();
+  if (!settings.jevEnabled) {
+    sendJson(res, 200, {
+      ok: false,
+      erro: 'O JEV está desligado. Ligue-o no painel.',
+    });
+    return;
+  }
+
+  const corpo = await readJson(req).catch(() => ({}));
+  let t;
+  try {
+    t = await agenda.triar(opcoesDaAgenda(corpo, settings));
+  } catch (err) {
+    sendJson(res, 200, { ok: false, erro: err.message });
+    return;
+  }
+  if (!t.ok) {
+    sendJson(res, 200, t);
+    return;
+  }
+  ultimaTriagem = t;
+
+  res.writeHead(200, {
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Accel-Buffering': 'no',
+  });
+  let alive = true;
+  req.on('close', () => {
+    alive = false;
+    session.abort();
+  });
+  const send = (obj) => {
+    if (!alive) return;
+    try {
+      res.write(`${JSON.stringify(obj)}\n`);
+    } catch {
+      /* cliente saiu */
+    }
+  };
+
+  // A triagem vem antes do primeiro token: a interface mostra o progresso.
+  send({ type: 'triagem', ms: t.ms, custoUSD: t.custoUSD, contagens: {
+    hoje: t.filaDoDia.length, semana: t.daSemana.length, incerto: t.revisar.length, ruido: t.ruido.length,
+  } });
+
+  await session.ask(
+    `Fatos do meu dia, já classificados:\n\n${t.resumo}\n\n` +
+      'Faça o resumo do meu dia para eu ouvir agora.',
+    {
+      onToken: (token, full) => send({ type: 'token', token, full }),
+      onDone: (r) => send({ type: 'done', text: r.text, stats: r.stats, triagem: t }),
+      onError: (error, meta) => send({ type: 'error', error, ...(meta || {}) }),
+      onAborted: () => send({ type: 'aborted' }),
+    },
+    { systemPrompt: settings.agendaPrompt, semBase: true }
+  );
+  res.end();
+}
+
+/** Localiza uma mensagem da última triagem pelo uid. */
+function mensagemDaTriagem(uid) {
+  if (!ultimaTriagem) return null;
+  return ultimaTriagem.mensagens.find((m) => String(m.uid) === String(uid)) || null;
+}
+
+/**
+ * Rascunho de resposta escrito pelo modelo local. O JEV decide; quem escreve
+ * é o modelo da casa — e o texto só é enviado depois de o usuário aprovar.
+ */
+async function handleAgendaRascunho(req, res) {
+  const settings = config.loadSettings();
+  const corpo = await readJson(req);
+  const alvo = mensagemDaTriagem(corpo.uid);
+  if (!alvo) {
+    sendJson(res, 200, {
+      ok: false,
+      erro: 'Mensagem não encontrada. Rode a triagem de novo.',
+    });
+    return;
+  }
+
+  // O rascunho precisa do texto completo, não do trecho usado na triagem.
+  let corpoMensagem = alvo.trecho || '';
+  if (!corpoMensagem || corpo.textoCompleto) {
+    const r = await mailbox.ler(alvo.uid);
+    if (r.ok && r.mensagem) corpoMensagem = r.mensagem.texto;
+  }
+
+  const instrucoes = String(corpo.instrucoes || '').trim();
+  const pedido =
+    `Escreva a resposta deste e-mail, em português do Brasil.\n\n` +
+    `De: ${alvo.de} <${alvo.enderecoDe}>\n` +
+    `Assunto: ${alvo.assunto}\n\n` +
+    `Mensagem recebida:\n${corpoMensagem.slice(0, 6000)}\n\n` +
+    (instrucoes ? `Orientação minha para você: ${instrucoes}\n\n` : '') +
+    'Escreva apenas o corpo da resposta, pronto para enviar. Sem cabeçalho, ' +
+    'sem assunto, sem markdown, sem aspas em volta. Tom profissional e cordial, ' +
+    'direto ao ponto, no máximo 8 linhas. Assine como Hudson.';
+
+  res.writeHead(200, {
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Accel-Buffering': 'no',
+  });
+  let alive = true;
+  req.on('close', () => {
+    alive = false;
+    session.abort();
+  });
+  const send = (obj) => {
+    if (!alive) return;
+    try {
+      res.write(`${JSON.stringify(obj)}\n`);
+    } catch {
+      /* cliente saiu */
+    }
+  };
+
+  await session.ask(
+    pedido,
+    {
+      onToken: (token, full) => send({ type: 'token', token, full }),
+      onDone: (r) => send({ type: 'done', text: r.text, stats: r.stats, alvo: resumoDoAlvo(alvo) }),
+      onError: (error, meta) => send({ type: 'error', error, ...(meta || {}) }),
+      onAborted: () => send({ type: 'aborted' }),
+    },
+    { systemPrompt: settings.systemPrompt, semBase: true }
+  );
+  res.end();
+}
+
+function resumoDoAlvo(m) {
+  return {
+    uid: m.uid,
+    de: m.de,
+    enderecoDe: m.enderecoDe,
+    assunto: m.assunto,
+    messageId: m.messageId,
+    referencias: m.referencias,
+  };
+}
+
+/**
+ * Envio de resposta. Exige `confirmado: true` no corpo — trava deliberada,
+ * para que nenhum caminho acidental mande e-mail em nome do usuário.
+ */
+async function handleAgendaEnviar(req, res) {
+  const corpo = await readJson(req);
+  if (corpo.confirmado !== true) {
+    sendJson(res, 200, {
+      ok: false,
+      erro: 'Envio não confirmado. Revise o texto e confirme explicitamente.',
+    });
+    return;
+  }
+  const alvo = mensagemDaTriagem(corpo.uid) || {};
+  const para = corpo.para || alvo.enderecoDe;
+  const assunto = corpo.assunto || responderAssunto(alvo.assunto);
+  const texto = String(corpo.texto || '').trim();
+  if (!para || !texto) {
+    sendJson(res, 200, { ok: false, erro: 'Faltam destinatário ou texto.' });
+    return;
+  }
+  const r = await mailbox.enviar({
+    para,
+    assunto,
+    texto,
+    respostaA: corpo.respostaA || alvo.messageId,
+    referencias: corpo.referencias || alvo.referencias,
+  });
+  if (r.ok) agenda.limparCache();
+  sendJson(res, 200, r);
+}
+
+/** "Re: " sem duplicar se já houver. */
+function responderAssunto(assunto) {
+  const a = String(assunto || '(sem assunto)').trim();
+  return /^re:/i.test(a) ? a : `Re: ${a}`;
+}
+
+/**
+ * Pergunta sobre o dia, feita no chat.
+ *
+ * Importante: isto NÃO manda nada novo para a nuvem. Responde apenas com a
+ * última triagem que o usuário já aprovou. Se ainda não houver uma, diz como
+ * obter — em vez de enviar e-mail para fora sem avisar.
+ */
+async function handleAgendaPerguntar(req, res) {
+  const settings = config.loadSettings();
+  const corpo = await readJson(req);
+  const pergunta = String(corpo.pergunta || '').trim();
+
+  res.writeHead(200, {
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Accel-Buffering': 'no',
+  });
+  let alive = true;
+  req.on('close', () => {
+    alive = false;
+    session.abort();
+  });
+  const send = (obj) => {
+    if (!alive) return;
+    try {
+      res.write(`${JSON.stringify(obj)}\n`);
+    } catch {
+      /* cliente saiu */
+    }
+  };
+
+  if (!ultimaTriagem) {
+    send({
+      type: 'error',
+      error:
+        'Ainda não olhei seu dia nesta sessão. Abra a visão 🌤️ e clique em ' +
+        '"Fazer o resumo do dia" — lá você vê e aprova o que sai da sua ' +
+        'máquina. Depois eu respondo aqui no chat normalmente.',
+    });
+    res.end();
+    return;
+  }
+
+  const idade = Date.now() - new Date(ultimaTriagem.quando).getTime();
+  const minutos = Math.round(idade / 60000);
+
+  await session.ask(
+    `Fatos do meu dia, classificados pelo JEV${minutos > 0 ? ` há ${minutos} minuto(s)` : ''}:\n\n` +
+      `${ultimaTriagem.resumo}\n\n` +
+      `Minha pergunta: ${pergunta}`,
+    {
+      onToken: (token, full) => send({ type: 'token', token, full }),
+      onDone: (r) => send({ type: 'done', text: r.text, stats: r.stats }),
+      onError: (error, meta) => send({ type: 'error', error, ...(meta || {}) }),
+      onAborted: () => send({ type: 'aborted' }),
+    },
+    { systemPrompt: settings.agendaPrompt, semBase: true }
+  );
+  res.end();
+}
+
+/** Fatos do último dia triado, para a interface montar a tela. */
+async function handleAgendaUltima(res) {
+  if (!ultimaTriagem) {
+    sendJson(res, 200, { ok: false, erro: 'Nenhuma triagem feita ainda.' });
+    return;
+  }
+  sendJson(res, 200, { ok: true, triagem: ultimaTriagem });
+}
+
+/** Informações de fuso e limites, para a tela de ajustes. */
+async function handleAgendaInfo(res) {
+  sendJson(res, 200, {
+    ok: true,
+    credenciais: credentials.status(),
+    fuso: process.env.NINO_FUSO || 'America/Sao_Paulo',
+    estatisticas: jev.estatisticas(),
+    modelosJev: jev.MODELOS_CONHECIDOS,
+  });
+}
+
 async function route(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const p = url.pathname;
@@ -400,6 +823,25 @@ async function route(req, res) {
       if (p === '/api/tts' && method === 'POST') return await handleTts(req, res);
       if (p === '/api/vision' && method === 'POST') return await handleVision(req, res);
       if (p === '/api/stt' && method === 'POST') return await handleStt(req, res, url);
+
+      // JEV, credenciais, e-mail e agenda.
+      if (p === '/api/credenciais' && method === 'GET') return await handleCredenciaisGet(res);
+      if (p === '/api/credenciais' && method === 'POST') return await handleCredenciaisPost(req, res);
+      if (p === '/api/credenciais' && method === 'DELETE') return await handleCredenciaisDelete(res);
+      if (p === '/api/jev/teste' && method === 'POST') return await handleJevTeste(res);
+      if (p === '/api/agenda/info' && method === 'GET') return await handleAgendaInfo(res);
+      if (p === '/api/agenda/eventos' && method === 'GET') return await handleAgendaEventos(res);
+      if (p === '/api/agenda/previa' && method === 'POST') return await handleAgendaPrevia(req, res);
+      if (p === '/api/agenda/triar' && method === 'POST') return await handleAgendaTriar(req, res);
+      if (p === '/api/agenda/resumo' && method === 'POST') return await handleAgendaResumo(req, res);
+      if (p === '/api/agenda/rascunho' && method === 'POST') return await handleAgendaRascunho(req, res);
+      if (p === '/api/agenda/enviar' && method === 'POST') return await handleAgendaEnviar(req, res);
+      if (p === '/api/agenda/ultima' && method === 'GET') return await handleAgendaUltima(res);
+      if (p === '/api/agenda/perguntar' && method === 'POST') return await handleAgendaPerguntar(req, res);
+      if (p === '/api/agenda/ajustes' && method === 'POST') {
+        const { patch } = await readJson(req);
+        return sendJson(res, 200, { ok: true, settings: config.saveSettings(patch || {}) });
+      }
       if (p === '/api/events' && method === 'GET') {
         res.writeHead(200, {
           'Content-Type': 'text/event-stream; charset=utf-8',

@@ -145,6 +145,64 @@ app.whenReady().then(async () => {
   await settle(page);
   await shoot(win, '7-falando');
 
+  /* ------------------ 8. Ajustes: JEV e credenciais ------------------ */
+  await page.executeJavaScript(`
+    setView('settings');
+    el('viewSettings').scrollTop = el('viewSettings').scrollHeight;
+    true
+  `);
+  await settle(page);
+  await shoot(win, '8-ajustes-jev');
+
+  /* ----------------------- 9. Meu dia: prévia ------------------------ */
+  await page.executeJavaScript(`
+    el('bubble').classList.add('hidden');
+    setView('day');
+    diaStatus('Li 5 mensagem(ns) e 3 compromisso(s). Confira o que sairia da sua máquina e aprove.');
+    true
+  `);
+  await page.executeJavaScript(`pedirPrevia()`);
+  await settle(page, 1400);
+  await shoot(win, '9-dia-previa');
+
+  /* --------------------- 10. Meu dia: resultado ---------------------- */
+  const r10 = await page.executeJavaScript(`
+    (async () => {
+      try {
+        const t = await api.day.triar({});
+        dia.triagem = t;
+        el('dayPreview').classList.add('hidden');
+        renderDia(t);
+        diaStatus('Pronto em 0,3s — US$ 0,000190. 2 para hoje, 1 incerta(s), 6 descartável(is).', 'ok');
+        return 'ok:' + (t.mensagens || []).length;
+      } catch (e) {
+        return 'erro:' + e.message;
+      }
+    })()
+  `);
+  console.log('  passo 10:', r10);
+  await settle(page, 1200);
+  await shoot(win, '10-dia-resultado');
+
+  /* --------------------- 11. Meu dia: rascunho ----------------------- */
+  const r11 = await page.executeJavaScript(`
+    (async () => {
+      try {
+        await rascunharResposta('1');
+        diaStatus('Rascunho pronto. Revise e envie quando quiser.', 'ok');
+        // Rola até o cartão com o rascunho, que fica abaixo da agenda.
+        const caixa = document.querySelector('.rascunho');
+        if (caixa) caixa.scrollIntoView({ block: 'center' });
+        return caixa ? 'ok' : 'sem caixa de rascunho';
+      } catch (e) {
+        return 'erro:' + e.message;
+      }
+    })()
+  `);
+  console.log('  passo 11:', r11);
+  await settle(page, 700);
+  await shoot(win, '11-dia-rascunho');
+
   console.log('\ncapturas prontas em', OUT);
   app.quit();
 });
@@ -152,4 +210,4 @@ app.whenReady().then(async () => {
 setTimeout(() => {
   console.error('tempo esgotado na pré-visualização');
   app.quit();
-}, 60000);
+}, 120000);
