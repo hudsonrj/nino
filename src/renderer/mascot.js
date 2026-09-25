@@ -202,6 +202,21 @@ function sendMessage(text) {
     return;
   }
 
+  // Pedido escrito que só faz sentido com imagem ("olhe para mim", "veja minha
+  // tela") liga a câmera ou captura a tela, mesmo sem clicar no botão.
+  if (api.vision && visionDisponivel && visionDisponivel.enabled) {
+    const intencao = detectVisionIntent(clean);
+    const permitido =
+      (intencao === 'camera' && visionDisponivel.camera) ||
+      (intencao === 'screen' && visionDisponivel.screen);
+    if (permitido) {
+      el('input').value = '';
+      autoGrow();
+      sendVision(intencao, clean);
+      return;
+    }
+  }
+
   if (!state.open) setOpen(true);
 
   addMessage('user', clean);
@@ -333,17 +348,58 @@ function paintVoiceToggle() {
 /* Visão (câmera e tela)                                               */
 /* ------------------------------------------------------------------ */
 
-async function sendVision(mode) {
+/**
+ * Reconhece pedidos escritos que só fazem sentido com imagem.
+ * Assim "olhe para mim" liga a câmera mesmo sem clicar no botão.
+ */
+const PADROES_CAMERA = [
+  /\bolh[ae]\s+(para\s+|pra\s+|pro\s+)?(mim|eu|meu\s+lado)\b/i,
+  /\bme\s+(olh[ae]|veja|v[êe]|enxerg[ae])\b/i,
+  /\bvoc[êe]\s+(me\s+)?(v[êe]|enxerga|consegue\s+me\s+ver)\b/i,
+  /\bo\s+que\s+(voc[êe]\s+)?(v[êe]|est[áa]\s+vendo|enxerga)\b/i,
+  /\bcomo\s+eu\s+(estou|pare[çc]o|estou\s+parecendo)\b/i,
+  /\b(o\s+que|quem)\s+(tem|h[áa])\s+(atr[áa]s|em\s+volta|na\s+sala)\b/i,
+  /\bdescrev[ae]\s+(o\s+ambiente|a\s+minha\s+volta|a\s+sala)\b/i,
+  /\b(nessa|nesta)\s+foto\b/i,
+];
+
+// "tela" sozinho é amplo demais ("o que é uma tela OLED?"), e "a tela" também
+// ("a tela do celular quebrou"). Por isso exigimos o possessivo em primeira
+// pessoa ou um verbo de olhar junto.
+const PADROES_TELA = [
+  /\b(minha|essa|esta|nesta|nessa)\s+tela\b/i,
+  /\btela\b[^.]{0,30}\b(explica|olh\w*|veja|v[êe]|analis\w*|mostra|print)\b/i,
+  /\b(explica|olh\w*|veja|v[êe]|analis\w*|mostra|print)\b[^.]{0,30}\btela\b/i,
+  /\bo\s+que\s+eu\s+estou\s+fazendo\b/i,
+  /\bexplica\s+(o\s+que|isso|essa|esta|a\s+situa[çc][ãa]o)\b/i,
+  /\bveja\s+o\s+que\s+est[áa]\s+acontecendo\b/i,
+];
+
+/** @returns {'camera'|'screen'|null} */
+function detectVisionIntent(texto) {
+  if (!texto) return null;
+  if (PADROES_CAMERA.some((re) => re.test(texto))) return 'camera';
+  if (PADROES_TELA.some((re) => re.test(texto))) return 'screen';
+  return null;
+}
+
+let visionDisponivel = null;
+
+/**
+ * @param {'camera'|'screen'} mode
+ * @param {string} [texto] pergunta escrita pelo usuário
+ */
+async function sendVision(mode, texto) {
   if (state.busy) {
     api.chat.abort();
     return;
   }
   if (!state.open) setOpen(true);
 
-  addMessage(
-    'user',
-    mode === 'camera' ? '📷 Olhe para mim e diga o que você vê' : '🖥️ Olhe minha tela e explique'
-  );
+  const padrao =
+    mode === 'camera' ? 'Olhe para mim e diga o que você vê' : 'Olhe minha tela e explique';
+  const rotulo = texto || padrao;
+  addMessage('user', `${mode === 'camera' ? '📷' : '🖥️'} ${rotulo}`);
 
   el('sources').classList.add('hidden');
   state.botText = '';
@@ -354,9 +410,8 @@ async function sendVision(mode) {
   showBubble(mode === 'camera' ? '📷 Deixa eu te ver…' : '🖥️ Deixa eu olhar sua tela…', 3500);
 
   // Os tokens chegam pelos mesmos eventos da conversa (chat:token/chat:done).
-  const res = await api.vision.capture(mode);
+  const res = await api.vision.capture(mode, { question: texto || '' });
   if (res && res.ok === false && !res.aborted && state.botEl) {
-    // chat:error já tratou de mostrar a mensagem; só limpamos o estado.
     setBusy(false);
   }
 }
@@ -374,12 +429,17 @@ async function setupVision() {
 
   try {
     const disp = await api.vision.available();
+    visionDisponivel = disp;
     if (!disp.enabled) {
       btnCam.classList.add('hidden');
       btnScr.classList.add('hidden');
     } else {
       if (!disp.camera) btnCam.classList.add('hidden');
       if (!disp.screen) btnScr.classList.add('hidden');
+    }
+    // Avisa no campo de texto que dá para pedir por escrito.
+    if (disp.enabled && disp.camera) {
+      el('input').placeholder = 'Pergunte algo, ou escreva "olhe para mim"…';
     }
   } catch {
     /* mantém os botões */

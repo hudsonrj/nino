@@ -35,6 +35,19 @@ para olhar. Dois botões no campo de mensagem:
 
 A resposta é falada como qualquer outra, frase por frase.
 
+**Também funciona por texto.** Escrever um pedido que só faz sentido com imagem
+liga a captura sozinho — não precisa clicar no botão:
+
+| Você escreve | O que acontece |
+|---|---|
+| "olhe para mim", "o que você vê?", "como eu estou?" | liga a câmera |
+| "olhe minha tela", "o que eu estou fazendo?", "explica o que está acontecendo" | captura a tela |
+| "o que é uma tela OLED?" | conversa normal (não captura nada) |
+
+A detecção é por expressões, não por um modelo: é previsível e nunca captura
+nada por engano em perguntas comuns. Ajuste em `detectVisionIntent()`
+(`src/renderer/mascot.js`) se quiser outros gatilhos.
+
 **Privacidade:** a imagem vai apenas para o **Ollama local** e fica **só na
 memória** — nunca é gravada em disco. A câmera é ligada durante a captura e
 **desligada em seguida**. Para desligar tudo, use ⚙️ → *Visão*.
