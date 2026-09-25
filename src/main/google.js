@@ -32,9 +32,52 @@ const credentials = require('./credentials');
 const AUTORIZACAO = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN = 'https://oauth2.googleapis.com/token';
 
-const PORTA = Number(process.env.NINO_GOOGLE_PORT || 3099);
-const REDIRECIONAMENTO =
-  process.env.NINO_GOOGLE_REDIRECT || `http://localhost:${PORTA}/oauth2callback`;
+const PORTA_PADRAO = Number(process.env.NINO_GOOGLE_PORT || 3099);
+
+/**
+ * Endereços de retorno que tentamos. O Google exige que o `redirect_uri`
+ * enviado seja IDÊNTICO ao cadastrado no projeto — inclusive a barra final.
+ * Como é fácil cadastrar um e o app mandar outro, o Nino testa estes em
+ * ordem e usa o primeiro que o Google aceitar. Assim funciona com qualquer
+ * um deles cadastrado, sem o usuário ter que adivinhar.
+ */
+function candidatosRedirecionamento() {
+  if (process.env.NINO_GOOGLE_REDIRECT) return [process.env.NINO_GOOGLE_REDIRECT];
+  const P = PORTA_PADRAO;
+  const salvos = credentials.google().redirectUri;
+  const lista = [
+    `http://localhost:${P}/oauth2callback`,
+    `http://localhost:${P}/`,
+    `http://127.0.0.1:${P}/oauth2callback`,
+    `http://127.0.0.1:${P}/`,
+    `http://localhost:${P}`,
+    `http://127.0.0.1:${P}`,
+    'http://localhost',
+    'http://127.0.0.1',
+  ];
+  // O que já funcionou antes vem na frente.
+  return salvos ? [salvos, ...lista.filter((u) => u !== salvos)] : lista;
+}
+
+/** O endereço em uso agora. */
+function redirecionamento() {
+  return (
+    process.env.NINO_GOOGLE_REDIRECT || credentials.google().redirectUri || candidatosRedirecionamento()[0]
+  );
+}
+
+/** A porta em que precisamos escutar para receber a resposta do Google. */
+function portaEscuta() {
+  try {
+    return Number(new URL(redirecionamento()).port) || PORTA_PADRAO;
+  } catch {
+    return PORTA_PADRAO;
+  }
+}
+
+// Mantidos para compatibilidade com o que já usava esses nomes.
+const REDIRECIONAMENTO = redirecionamento();
+const PORTA = portaEscuta();
 
 /**
  * Escopos pedidos. `gmail.readonly` e `gmail.send` são "restricted" para o
@@ -220,11 +263,11 @@ function explicarErro(json, texto, status) {
 
 let pendente = null; // { servidor, resolve, reject, relogio }
 
-function urlAutorizacao(estado) {
+function urlAutorizacao(estado, endereco) {
   const g = credentials.google();
   const p = new URLSearchParams({
     client_id: g.clientId,
-    redirect_uri: REDIRECIONAMENTO,
+    redirect_uri: endereco || redirecionamento(),
     response_type: 'code',
     // access_type=offline + prompt=consent é o que garante o refresh token.
     // Sem o prompt, uma segunda autorização não devolve refresh token novo.
@@ -274,7 +317,7 @@ function abrirNavegador(url) {
  * Começa o fluxo: sobe o servidor de retorno e devolve a URL para o usuário
  * abrir. Fica esperando o Google chamar de volta.
  */
-function iniciar({ abrir = true } = {}) {
+async function iniciar({ abrir = true } = {}) {
   if (!configurado()) {
     return {
       ok: false,
@@ -285,17 +328,26 @@ function iniciar({ abrir = true } = {}) {
   }
   if (pendente) {
     // Já existe um fluxo esperando: reaproveita em vez de abrir outra porta.
-    return { ok: true, url: pendente.url, jaEsperando: true };
+    return { ok: true, url: pendente.url, jaEsperando: true, redirecionamento: pendente.endereco };
   }
 
+  // Descobre qual endereço este projeto aceita antes de mandar o usuário
+  // para o navegador — assim ele não descobre o erro só depois de autorizar.
+  const descoberta = await descobrirRedirecionamento();
+  if (!descoberta.ok) return descoberta;
+  const endereco = descoberta.uri;
+  const porta = Number(new URL(endereco).port) || PORTA_PADRAO;
+
   const estado = require('crypto').randomBytes(16).toString('hex');
-  const url = urlAutorizacao(estado);
+  const url = urlAutorizacao(estado, endereco);
 
   return new Promise((resolve) => {
     const servidor = http.createServer(async (req, res) => {
-      const u = new URL(req.url, `http://localhost:${PORTA}`);
-      if (u.pathname !== '/oauth2callback') {
-        res.writeHead(404).end('não encontrado');
+      const u = new URL(req.url, `http://localhost:${porta}`);
+      // Aceita a resposta em QUALQUER caminho: o que importa é o `code`.
+      // Assim funciona tanto com ".../oauth2callback" quanto com ".../".
+      if (u.pathname.includes('favicon')) {
+        res.writeHead(204).end();
         return;
       }
 
@@ -359,12 +411,12 @@ function iniciar({ abrir = true } = {}) {
         ok: false,
         erro:
           err.code === 'EADDRINUSE'
-            ? `A porta ${PORTA} está ocupada. Feche o outro programa ou defina NINO_GOOGLE_PORT.`
+            ? `A porta ${porta} está ocupada. Feche o outro programa ou defina NINO_GOOGLE_PORT.`
             : `Não consegui abrir o servidor de retorno: ${err.message}`,
       });
     });
 
-    servidor.listen(PORTA, '127.0.0.1', () => {
+    servidor.listen(porta, '127.0.0.1', () => {
       const relogio = setTimeout(() => {
         try {
           servidor.close();
@@ -374,9 +426,15 @@ function iniciar({ abrir = true } = {}) {
         pendente = null;
       }, 5 * 60 * 1000);
 
-      pendente = { servidor, relogio, url };
+      pendente = { servidor, relogio, url, endereco };
       if (abrir) abrirNavegador(url);
-      resolve({ ok: true, url, redirecionamento: REDIRECIONAMENTO });
+      resolve({
+        ok: true,
+        url,
+        redirecionamento: endereco,
+        descoberto: !descoberta.guardado,
+        tentados: descoberta.tentados,
+      });
     });
   });
 }
@@ -388,7 +446,8 @@ async function trocarCodigo(codigo) {
     code: codigo,
     client_id: g.clientId,
     client_secret: g.clientSecret,
-    redirect_uri: REDIRECIONAMENTO,
+    // Tem que ser EXATAMENTE o mesmo endereço usado na autorização.
+    redirect_uri: redirecionamento(),
     grant_type: 'authorization_code',
   });
 
@@ -471,24 +530,23 @@ async function token({ margemSegundos = 120 } = {}) {
  * como texto legível. Procurar "redirect_uri_mismatch" na resposta crua não
  * encontra nada, e o diagnóstico conclui, errado, que está tudo bem.
  */
-async function verificarRedirecionamento() {
-  const url = urlAutorizacao('diagnostico');
+async function testarUmEndereco(endereco) {
+  const url = urlAutorizacao('diagnostico', endereco);
   let r;
   try {
     r = await fetch(url, { redirect: 'follow' });
   } catch (err) {
-    return { ok: false, campo: 'rede', erro: `Não consegui falar com o Google: ${err.message}` };
+    return { estado: 'rede', erro: `Não consegui falar com o Google: ${err.message}` };
   }
 
   const pistas = [String(r.url)];
   try {
-    const corpo = await r.text();
-    pistas.push(corpo.slice(0, 6000));
+    pistas.push((await r.text()).slice(0, 6000));
   } catch {
     /* sem corpo: as pistas da URL bastam */
   }
-
-  // Decodifica o authError, que é um protobuf em base64.
+  // O motivo vem codificado em base64 no parâmetro authError — procurar o
+  // texto puro na resposta não encontra nada e dá falso positivo.
   try {
     const m = /authError=([^&]+)/.exec(String(r.url));
     if (m) pistas.push(Buffer.from(decodeURIComponent(m[1]), 'base64').toString('utf8'));
@@ -497,32 +555,90 @@ async function verificarRedirecionamento() {
   }
 
   const texto = pistas.join(' ');
+  if (/redirect_uri_mismatch/.test(texto)) return { estado: 'mismatch' };
+  if (/invalid_client|OAuth client was not found|deleted_client/.test(texto)) {
+    return { estado: 'cliente' };
+  }
+  if (/invalid_scope|admin_policy_enforced/.test(texto)) return { estado: 'escopo' };
+  if (/access_denied|consent|accounts\.google\.com\/signin/i.test(texto)) {
+    return { estado: 'aceito' };
+  }
+  // Sem sinal de erro: o Google seguiu para o consentimento.
+  return { estado: 'aceito' };
+}
 
-  if (/redirect_uri_mismatch/.test(texto)) {
+/**
+ * Descobre qual endereço de retorno este projeto aceita.
+ *
+ * O Google compara o `redirect_uri` caractere por caractere com o que está
+ * cadastrado — inclusive a barra final. Em vez de exigir que o usuário
+ * adivinhe, testamos os candidatos comuns e guardamos o que funcionar.
+ */
+async function descobrirRedirecionamento({ forcar = false } = {}) {
+  const salvos = credentials.google().redirectUri;
+  if (salvos && !forcar && process.env.NINO_GOOGLE_REDIRECT === undefined) {
+    const teste = await testarUmEndereco(salvos);
+    if (teste.estado === 'aceito') return { ok: true, uri: salvos, guardado: true };
+  }
+
+  const tentados = [];
+  for (const uri of candidatosRedirecionamento()) {
+    const r = await testarUmEndereco(uri);
+    tentados.push({ uri, estado: r.estado });
+    if (r.estado === 'aceito') {
+      credentials.gravar({ google: { redirectUri: uri } });
+      return { ok: true, uri, tentados };
+    }
+    if (r.estado === 'cliente') {
+      return {
+        ok: false,
+        campo: 'client_id',
+        erro: 'O Google não reconhece este client_id. Confira se copiou o cliente certo.',
+        tentados,
+      };
+    }
+    if (r.estado === 'escopo') {
+      return {
+        ok: false,
+        campo: 'escopo',
+        erro: 'O Google recusou os escopos pedidos para este projeto.',
+        tentados,
+      };
+    }
+    if (r.estado === 'rede') {
+      return { ok: false, campo: 'rede', erro: r.erro, tentados };
+    }
+  }
+
+  return {
+    ok: false,
+    campo: 'redirecionamento',
+    erro: 'Nenhum endereço de retorno conhecido está cadastrado neste projeto do Google Cloud.',
+    comoResolver:
+      'Google Cloud Console → APIs e serviços → Credenciais → seu cliente OAuth ' +
+      '→ "URIs de redirecionamento autorizados" → adicione UM destes: ' +
+      candidatosRedirecionamento()
+        .slice(0, 4)
+        .join('  ou  '),
+    tentados,
+  };
+}
+
+/** Compatibilidade: confere apenas o endereço em uso. */
+async function verificarRedirecionamento() {
+  const r = await testarUmEndereco(redirecionamento());
+  if (r.estado === 'aceito') {
+    return { ok: true, detalhe: `O Google aceitou ${redirecionamento()}.` };
+  }
+  if (r.estado === 'mismatch') {
     return {
       ok: false,
       campo: 'redirecionamento',
-      erro: 'O endereço de retorno ainda não está cadastrado neste projeto do Google Cloud.',
-      comoResolver:
-        'Google Cloud Console → APIs e serviços → Credenciais → seu cliente ' +
-        `OAuth → "URIs de redirecionamento autorizados" → adicione exatamente ${REDIRECIONAMENTO}`,
+      erro: `O endereço ${redirecionamento()} não está cadastrado neste projeto.`,
+      comoResolver: 'Use o Diagnóstico para o Nino descobrir sozinho qual está cadastrado.',
     };
   }
-  if (/invalid_client|OAuth client was not found|deleted_client/.test(texto)) {
-    return {
-      ok: false,
-      campo: 'client_id',
-      erro: 'O Google não reconhece este client_id. Confira se copiou o cliente certo.',
-    };
-  }
-  if (/invalid_scope|admin_policy_enforced/.test(texto)) {
-    return {
-      ok: false,
-      campo: 'escopo',
-      erro: 'O Google recusou os escopos pedidos para este projeto.',
-    };
-  }
-  return { ok: true, detalhe: 'O Google aceitou o endereço de retorno.' };
+  return { ok: false, campo: r.estado, erro: r.erro || `Estado: ${r.estado}` };
 }
 
 /** Encerra o fluxo que estiver esperando, se houver. */
@@ -563,8 +679,8 @@ function status() {
     email: g.email || '',
     escopos: g.escopos || '',
     expiraEm: g.accessTokenExpira || '',
-    redirecionamento: REDIRECIONAMENTO,
-    porta: PORTA,
+    redirecionamento: redirecionamento(),
+    porta: portaEscuta(),
     esperando: esperando(),
     escoposPedidos: ESCOPOS,
   };
@@ -572,8 +688,17 @@ function status() {
 
 module.exports = {
   ESCOPOS,
-  REDIRECIONAMENTO,
-  PORTA,
+  get REDIRECIONAMENTO() {
+    return redirecionamento();
+  },
+  get PORTA() {
+    return portaEscuta();
+  },
+  candidatosRedirecionamento,
+  redirecionamento,
+  portaEscuta,
+  descobrirRedirecionamento,
+  testarUmEndereco,
   configurado,
   conectado,
   status,

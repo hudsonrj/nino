@@ -476,6 +476,7 @@ async function handleGoogleDiagnostico(req, res) {
   const g = credentials.google();
   const problemas = [];
   const itensOk = [];
+  let descoberta = null;
 
   if (!g.clientId || !g.clientSecret) {
     problemas.push({
@@ -484,14 +485,19 @@ async function handleGoogleDiagnostico(req, res) {
     });
   } else {
     itensOk.push(`Cliente OAuth informado (${credentials.mascarar(g.clientId)}).`);
-    const teste = await google.verificarRedirecionamento();
-    if (teste.ok) itensOk.push(teste.detalhe);
-    else
+
+    // A pergunta que importa: qual endereço de retorno ESTE projeto aceita?
+    // Em vez de exigir que o usuário adivinhe, testamos os candidatos.
+    descoberta = await google.descobrirRedirecionamento({ forcar: true });
+    if (descoberta.ok) {
+      itensOk.push(`Endereço de retorno aceito pelo Google: ${descoberta.uri}`);
+    } else {
       problemas.push({
-        campo: teste.campo,
-        erro: teste.erro,
-        ...(teste.comoResolver ? { comoResolver: teste.comoResolver } : {}),
+        campo: descoberta.campo,
+        erro: descoberta.erro,
+        ...(descoberta.comoResolver ? { comoResolver: descoberta.comoResolver } : {}),
       });
+    }
   }
 
   if (g.refreshToken) {
@@ -507,8 +513,9 @@ async function handleGoogleDiagnostico(req, res) {
     ok: problemas.length === 0,
     problemas,
     itensOk,
-    redirecionamento: google.REDIRECIONAMENTO,
-    porta: google.PORTA,
+    redirecionamento: google.redirecionamento(),
+    descoberta,
+    porta: google.portaEscuta(),
     escopos: google.ESCOPOS,
     avisoSeteDias:
       'Enquanto o app estiver com status "Testing" no Google Cloud, o Google ' +

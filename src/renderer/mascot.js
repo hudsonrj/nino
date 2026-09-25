@@ -1653,9 +1653,14 @@ async function conectarGoogle() {
       return;
     }
     el('setGoogleSecret').value = '';
+    const nota = r.descoberto
+      ? `<br><b>Endereço de retorno aceito:</b> ${esc(r.redirecionamento)}` +
+        '<br><span style="opacity:.8">Descobri sozinho qual URI este projeto já tem cadastrada — você não precisa mexer no console.</span>'
+      : `<br><b>Endereço de retorno:</b> ${esc(r.redirecionamento)}`;
     googleAviso(
       'Autorize no navegador que abriu. Se não abriu, use este endereço:<br>' +
-        `<a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:#48d6e8;word-break:break-all">${esc(r.url)}</a>`
+        `<a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:#48d6e8;word-break:break-all">${esc(r.url)}</a>` +
+        nota
     );
     googleMsg('Esperando você autorizar no Google…');
     esperarGoogle();
@@ -1708,6 +1713,12 @@ async function diagnosticarGoogle() {
     }
     if (r.itensOk && r.itensOk.length) {
       for (const i of r.itensOk) partes.push(`✓ ${esc(i)}`);
+    }
+    if (r.descoberta && r.descoberta.tentados && r.descoberta.tentados.length > 1) {
+      const tentados = r.descoberta.tentados
+        .map((t) => `${t.estado === 'aceito' ? '✓' : '·'} ${esc(t.uri)}`)
+        .join('<br>');
+      partes.push(`<br>Endereços testados:<br>${tentados}`);
     }
     if (r.avisoSeteDias) partes.push(`<br>⚠ ${esc(r.avisoSeteDias)}`);
     caixa.classList.remove('hidden');

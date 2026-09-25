@@ -33,6 +33,9 @@ const VAZIO = {
     accessToken: '',
     accessTokenExpira: '',
     escopos: '',
+    // Endereço de retorno que o Google ACEITOU. Descoberto por tentativa,
+    // porque o Google exige que seja idêntico ao cadastrado no projeto.
+    redirectUri: '',
   },
 };
 

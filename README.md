@@ -77,16 +77,24 @@ escrever na agenda.
 *APIs e serviços → Credenciais → Criar credenciais → ID do cliente OAuth*. Cole
 o `client_id` e o `client_secret` nos campos correspondentes.
 
-**3.** **Cadastre o endereço de retorno** no mesmo cliente OAuth, em *URIs de
-redirecionamento autorizados*:
+**3.** **Cadastre um endereço de retorno** no mesmo cliente OAuth, em *URIs de
+redirecionamento autorizados*. Qualquer um destes serve — o Nino descobre
+sozinho qual você cadastrou:
 
 ```
+http://localhost:3099/
 http://localhost:3099/oauth2callback
+http://127.0.0.1:3099/
 ```
 
-Sem isso o Google responde `redirect_uri_mismatch` e nem chega a mostrar a tela
-de consentimento. O botão **Diagnóstico** confere isso por você: ele consulta o
-Google e diz exatamente o que falta, sem você precisar abrir o navegador.
+Sem nenhum deles o Google responde `redirect_uri_mismatch` e nem chega a mostrar
+a tela de consentimento. O motivo é que o Google compara o endereço **caractere
+por caractere**, inclusive a barra final — e `http://localhost:3099` (sem barra)
+é diferente de `http://localhost:3099/`.
+
+Por isso o Nino **testa os candidatos e usa o primeiro que o Google aceitar**,
+guardando a escolha no cofre. Você não precisa adivinhar. O botão
+**Diagnóstico** mostra quais endereços foram testados e qual passou.
 
 **4.** Ative as duas APIs em *APIs e serviços → Biblioteca*: **Gmail API** e
 **Google Calendar API**.

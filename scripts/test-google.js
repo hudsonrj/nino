@@ -138,22 +138,34 @@ conferir(
 );
 
 secao('6. endereço de retorno do OAuth (fala com o Google)');
-const esperado = 'http://localhost:3099/oauth2callback';
-conferir('o Nino usa o endereço esperado', google.REDIRECIONAMENTO === esperado, google.REDIRECIONAMENTO);
+const candidatos = google.candidatosRedirecionamento();
+conferir('tem vários candidatos para descobrir', candidatos.length >= 4, `${candidatos.length} candidatos`);
+conferir(
+  'inclui os dois formatos que o Google trata como diferentes',
+  candidatos.includes('http://localhost:3099/') &&
+    candidatos.includes('http://localhost:3099/oauth2callback'),
+  'com e sem barra final'
+);
 conferir('a URL de autorização pede refresh token', /access_type=offline/.test(google.urlAutorizacao('x')));
 conferir('força a tela de consentimento', /prompt=consent/.test(google.urlAutorizacao('x')));
 conferir('pede os escopos do Gmail e da Agenda', /gmail\.readonly/.test(google.urlAutorizacao('x')));
 conferir('leva o state antifalsificação', /state=x/.test(google.urlAutorizacao('x')));
 
 (async () => {
-  const r = await google.verificarRedirecionamento();
+  const d = await google.descobrirRedirecionamento();
   conferir(
-    'detecta corretamente o estado do endereço de retorno',
-    typeof r.ok === 'boolean',
-    r.ok ? r.detalhe : `${r.campo}: ${r.erro}`
+    'descobre um endereço de retorno que o Google aceita',
+    d.ok === true,
+    d.ok ? d.uri : `${d.campo}: ${d.erro}`
   );
-  if (!r.ok && r.campo === 'redirecionamento') {
-    console.log(`\n  ↳ Para resolver: ${r.comoResolver}`);
+  if (d.ok) {
+    conferir('o endereço descoberto bate com a porta de escuta', (() => {
+      try { return Number(new URL(d.uri).port) === google.portaEscuta(); } catch { return false; }
+    })(), `${d.uri} -> porta ${google.portaEscuta()}`);
+  } else if (d.tentados) {
+    console.log('\n  Endereços testados:');
+    for (const t of d.tentados) console.log(`    ${t.estado.padEnd(10)} ${t.uri}`);
+    if (d.comoResolver) console.log(`\n  ↳ Para resolver: ${d.comoResolver}`);
   }
 
   console.log(
