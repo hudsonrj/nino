@@ -28,7 +28,7 @@ const { SUPPORTED_EXTENSIONS } = require('../main/ingest/extract');
 const credentials = require('../main/credentials');
 const jev = require('../main/jev');
 const mailbox = require('../main/mailbox');
-const calendar = require('../main/calendar');
+const google = require('../main/google');
 const agenda = require('../main/agenda');
 
 const RENDERER = path.join(config.ROOT, 'src', 'renderer');
@@ -394,17 +394,127 @@ async function handleCredenciaisPost(req, res) {
   if (st.typesafe.configurado) {
     resultado.jev = await jev.disponivel();
   }
-  if (st.google.email && st.google.senhaApp) {
+  // Só testa o que está realmente configurado — e pelo caminho que está
+  // ativo (OAuth tem prioridade sobre senha de app).
+  if (mailbox.caminhoDeEmail()) {
     resultado.email = await mailbox.ping();
   }
-  if (st.google.agenda) {
-    const r = await calendar.buscar({ url: credentials.google().icalUrl, dias: 1, max: 1 });
+  if (mailbox.caminhoDeAgenda()) {
+    const r = await mailbox.eventos({ dias: 1, max: 1 });
     resultado.agenda = r.ok
       ? { ok: true, mensagem: 'Agenda lida com sucesso.' }
       : { ok: false, erro: r.erro };
   }
   resultado.estatisticas = jev.estatisticas();
   sendJson(res, 200, resultado);
+}
+
+/* ------------------------------------------------------------------ */
+/* Conexão com o Google (OAuth)                                        */
+/* ------------------------------------------------------------------ */
+
+/** Estado da conexão, sem nunca devolver segredo. */
+async function handleGoogleStatus(res) {
+  const st = credentials.status();
+  const r = {
+    ok: true,
+    ...google.status(),
+    caminhoEmail: mailbox.caminhoDeEmail(),
+    caminhoAgenda: mailbox.caminhoDeAgenda(),
+    dicaCliente: st.google.clienteDica,
+  };
+  // Se já está conectado, confirma que a autorização ainda vale.
+  if (r.conectado) {
+    try {
+      const p = await mailbox.ping();
+      r.email = p.email || r.email;
+      r.funcionando = p.ok;
+      if (!p.ok) r.erro = p.erro;
+    } catch (err) {
+      r.funcionando = false;
+      r.erro = err.message;
+    }
+  }
+  sendJson(res, 200, r);
+}
+
+/** Salva client_id e client_secret e já começa o fluxo de autorização. */
+async function handleGoogleConectar(req, res) {
+  const { patch, abrir } = await readJson(req).catch(() => ({}));
+  if (patch) credentials.gravar({ google: patch });
+
+  const r = await google.iniciar({ abrir: abrir !== false });
+  if (!r.ok) return sendJson(res, 200, r);
+  sendJson(res, 200, {
+    ok: true,
+    url: r.url,
+    redirecionamento: r.redirecionamento,
+    jaEsperando: Boolean(r.jaEsperando),
+    instrucoes:
+      'Abra o endereço, autorize o acesso e volte aqui. O Nino percebe ' +
+      'sozinho quando o Google responder.',
+  });
+}
+
+async function handleGoogleCancelar(res) {
+  google.cancelar();
+  sendJson(res, 200, { ok: true });
+}
+
+async function handleGoogleDesconectar(res) {
+  google.desconectar();
+  sendJson(res, 200, { ok: true, ...google.status() });
+}
+
+/**
+ * Diagnóstico do OAuth: descobre o que costuma dar errado ANTES de o usuário
+ * perder tempo no navegador. O teste principal é se o Google aceita o
+ * endereço de retorno — se não estiver cadastrado, ele responde
+ * `redirect_uri_mismatch` sem nem mostrar a tela de consentimento.
+ */
+async function handleGoogleDiagnostico(req, res) {
+  const g = credentials.google();
+  const problemas = [];
+  const itensOk = [];
+
+  if (!g.clientId || !g.clientSecret) {
+    problemas.push({
+      campo: 'credenciais',
+      erro: 'Faltam o client_id e o client_secret do projeto no Google Cloud.',
+    });
+  } else {
+    itensOk.push(`Cliente OAuth informado (${credentials.mascarar(g.clientId)}).`);
+    const teste = await google.verificarRedirecionamento();
+    if (teste.ok) itensOk.push(teste.detalhe);
+    else
+      problemas.push({
+        campo: teste.campo,
+        erro: teste.erro,
+        ...(teste.comoResolver ? { comoResolver: teste.comoResolver } : {}),
+      });
+  }
+
+  if (g.refreshToken) {
+    try {
+      await google.token();
+      itensOk.push('A autorização salva continua válida.');
+    } catch (err) {
+      problemas.push({ campo: 'token', erro: err.message });
+    }
+  }
+
+  sendJson(res, 200, {
+    ok: problemas.length === 0,
+    problemas,
+    itensOk,
+    redirecionamento: google.REDIRECIONAMENTO,
+    porta: google.PORTA,
+    escopos: google.ESCOPOS,
+    avisoSeteDias:
+      'Enquanto o app estiver com status "Testing" no Google Cloud, o Google ' +
+      'expira a autorização em 7 dias. Para não reconectar toda semana, ' +
+      'publique o app (tela de consentimento → Publicar aplicativo).',
+  });
 }
 
 /** Apaga as credenciais do disco. */
@@ -485,11 +595,7 @@ async function handleAgendaTriar(req, res) {
 /** Só a agenda, sem e-mail e sem JEV. */
 async function handleAgendaEventos(res) {
   const settings = config.loadSettings();
-  const r = await calendar.buscar({
-    url: credentials.google().icalUrl,
-    dias: settings.agendaDias,
-    max: 40,
-  });
+  const r = await mailbox.eventos({ dias: settings.agendaDias, max: 40 });
   sendJson(res, 200, r);
 }
 
@@ -828,6 +934,13 @@ async function route(req, res) {
       if (p === '/api/credenciais' && method === 'GET') return await handleCredenciaisGet(res);
       if (p === '/api/credenciais' && method === 'POST') return await handleCredenciaisPost(req, res);
       if (p === '/api/credenciais' && method === 'DELETE') return await handleCredenciaisDelete(res);
+
+      // Conexão com o Google por OAuth.
+      if (p === '/api/google/status' && method === 'GET') return await handleGoogleStatus(res);
+      if (p === '/api/google/conectar' && method === 'POST') return await handleGoogleConectar(req, res);
+      if (p === '/api/google/cancelar' && method === 'POST') return await handleGoogleCancelar(res);
+      if (p === '/api/google/desconectar' && method === 'POST') return await handleGoogleDesconectar(res);
+      if (p === '/api/google/diagnostico' && method === 'POST') return await handleGoogleDiagnostico(req, res);
       if (p === '/api/jev/teste' && method === 'POST') return await handleJevTeste(res);
       if (p === '/api/agenda/info' && method === 'GET') return await handleAgendaInfo(res);
       if (p === '/api/agenda/eventos' && method === 'GET') return await handleAgendaEventos(res);

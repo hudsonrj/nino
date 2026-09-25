@@ -50,15 +50,73 @@ documentação apontada no guia dá 404. A rota que funciona é a **API direta**
 
 ### Como configurar
 
-1. **JEV** — crie a chave e cole em ⚙️ → *Chave da TypeSafe*. Use **⚡ Testar o
-   JEV agora** para ver o JEV responder de verdade, com tempo e custo.
-2. **Gmail** — informe seu endereço e uma **senha de app**
-   ([myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords),
-   exige verificação em duas etapas). Não é a sua senha normal.
-3. **Agenda** — no Google Agenda, em *Ajustes → escolha a agenda → Endereço
-   secreto no formato iCal*. É uma URL longa, **só de leitura e sem senha**.
-4. Ligue a chave **Usar o JEV para triar meu e-mail e minha agenda**.
-5. Abra a visão 🌤️ e clique em **Fazer o resumo do dia**.
+Primeiro o JEV, que é quem decide. Depois **uma das duas** formas de chegar ao
+seu e-mail e à sua agenda — o Nino aceita as duas, e o OAuth tem prioridade
+quando ambas estão configuradas.
+
+**1. JEV** — crie a chave em [console.typesafe.ai/keys](https://console.typesafe.ai/keys)
+e cole em ⚙️ → *Chave da TypeSafe*. Use **⚡ Testar o JEV agora** para vê-lo
+responder de verdade, com tempo e custo.
+
+#### Caminho A — senha de app (5 minutos, sem projeto no Google Cloud)
+
+**2.** Informe seu e-mail do Gmail e uma **senha de app**
+([myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords),
+exige verificação em duas etapas). Não é a sua senha normal.
+
+**3.** No Google Agenda, em *Ajustes → escolha a agenda → Endereço secreto no
+formato iCal*. É uma URL longa, **só de leitura e sem senha**.
+
+Funciona na hora. A desvantagem: é o caminho antigo do Google, e não permite
+escrever na agenda.
+
+#### Caminho B — OAuth (API do Gmail + API do Google Agenda)
+
+**2.** Crie um cliente OAuth no
+[Google Cloud Console](https://console.cloud.google.com/apis/credentials) →
+*APIs e serviços → Credenciais → Criar credenciais → ID do cliente OAuth*. Cole
+o `client_id` e o `client_secret` nos campos correspondentes.
+
+**3.** **Cadastre o endereço de retorno** no mesmo cliente OAuth, em *URIs de
+redirecionamento autorizados*:
+
+```
+http://localhost:3099/oauth2callback
+```
+
+Sem isso o Google responde `redirect_uri_mismatch` e nem chega a mostrar a tela
+de consentimento. O botão **Diagnóstico** confere isso por você: ele consulta o
+Google e diz exatamente o que falta, sem você precisar abrir o navegador.
+
+**4.** Ative as duas APIs em *APIs e serviços → Biblioteca*: **Gmail API** e
+**Google Calendar API**.
+
+**5.** Clique em **Conectar com o Google**. O navegador abre, você autoriza, e o
+Nino percebe sozinho quando o Google responde. O `refresh_token` fica no cofre e
+o acesso é renovado automaticamente.
+
+> ⚠️ **Os 7 dias.** Enquanto o app estiver com status **"Testing"** e usuários
+> **"External"**, o Google expira a autorização em **7 dias** — você reconecta
+> toda semana. Para não passar por isso, publique o app: *tela de consentimento
+> OAuth → Publicar aplicativo*. Para uso pessoal não é preciso passar pela
+> verificação do Google; ele apenas mostra um aviso de "app não verificado" na
+> tela de consentimento. Vale saber também que os escopos do Gmail são
+> *restricted*: num app não verificado eles funcionam para os usuários de teste
+> cadastrados.
+
+#### Qual escolher
+
+| | Caminho A (senha de app) | Caminho B (OAuth) |
+|---|---|---|
+| Tempo para configurar | 5 minutos | 15 minutos, com console |
+| Expira? | não | a cada 7 dias, se o app ficar em "Testing" |
+| Lê e envia e-mail | sim | sim |
+| Lê a agenda | sim | sim |
+| Escreve na agenda | não | possível no futuro |
+| Como o Google vê | caminho antigo | caminho oficial |
+
+**6.** Ligue a chave **Usar o JEV para triar meu e-mail e minha agenda** e abra a
+visão 🌤️ para clicar em **Fazer o resumo do dia**.
 
 ### Privacidade, em três travas
 
@@ -397,6 +455,7 @@ node scripts/smoke-test.js              # corpus pequeno, valida todo o caminho
 node scripts/smoke-test.js --full       # indexa o livro de teste inteiro
 node scripts/smoke-test.js --clear      # limpa a base antes
 node scripts/test-jev.js                # integração com o JEV, sem chave real
+node scripts/test-google.js             # OAuth: MIME, RFC 2822, fusos, diagnóstico
 node scripts/test-dia.js                # uma chamada real, com e-mails inventados
 ```
 
@@ -409,9 +468,9 @@ Para conferir a interface sem depender do Ollama (útil ao mexer no CSS):
 ./node_modules/.bin/electron --no-sandbox scripts/ui-preview.js /tmp/nino-ui
 ```
 
-Gera capturas PNG dos 11 estados da interface (ocioso, conversa, base,
-indexando, ajustes, ajustes do JEV, ouvindo, falando, prévia do dia, resultado
-da triagem e rascunho de resposta).
+Gera capturas PNG dos 13 estados da interface (ocioso, conversa, base,
+indexando, ajustes, ajustes do JEV, conexão com o Google, ouvindo, falando,
+prévia do dia, resultado da triagem, rascunho de resposta e pilha de suspeitos).
 
 ---
 
@@ -476,8 +535,8 @@ triagem.
 - O mascote é um só, com uma conversa por vez.
 - **A visão "Meu dia" funciona no modo web/navegador** (🌤️ e ⚙️). O app de
   desktop em Electron ainda não expõe essas rotas pela ponte nativa.
-- O JEV **lê** a agenda (pelo iCal); **criar e alterar eventos exigiria CalDAV
-  com OAuth**, que não está implementado.
+- A agenda é **somente leitura** nos dois caminhos. Escrever eventos exige o
+  escopo `calendar.events`, que não está pedido.
 - Só Gmail: outros provedores precisariam de ajuste nos endereços de IMAP/SMTP
   (`src/main/python/mailbox.py`), embora a estrutura já seja genérica.
 - Repetições de agenda complexas (regras `RRULE` exóticas) aparecem só na

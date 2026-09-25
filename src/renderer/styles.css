@@ -675,3 +675,15 @@ body.shell .send-btn {
   color: #ffb3c0;
   border-color: rgba(255, 107, 129, 0.55);
 }
+
+/* Conexão com o Google (OAuth) */
+.cred-estado {
+  display: flex; flex-direction: column; gap: 3px; flex: 0 0 auto;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid var(--line);
+  border-radius: 9px; padding: 8px 10px;
+}
+.cred-linha { font-size: 10.5px; color: var(--text-dim); line-height: 1.5; }
+.cred-linha b { color: var(--text); font-weight: 600; }
+#btnGoogleDesconectar { width: 100%; margin-top: 5px; }
+#googleDiag { word-break: break-word; }
+#googleDiag b { color: #fff; }

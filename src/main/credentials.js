@@ -21,7 +21,19 @@ const FILE = path.join(CONFIG_DIR, 'credenciais.json');
 
 const VAZIO = {
   typesafe: { apiKey: '' },
-  google: { email: '', appPassword: '', icalUrl: '' },
+  google: {
+    // Caminho simples: senha de app (IMAP/SMTP) + endereço secreto do iCal.
+    email: '',
+    appPassword: '',
+    icalUrl: '',
+    // Caminho OAuth: credenciais do projeto no Google Cloud e os tokens.
+    clientId: '',
+    clientSecret: '',
+    refreshToken: '',
+    accessToken: '',
+    accessTokenExpira: '',
+    escopos: '',
+  },
 };
 
 function garantirDir() {
@@ -74,6 +86,8 @@ function status() {
   const temChave = Boolean(c.typesafe.apiKey);
   const temGoogle = Boolean(c.google.email && c.google.appPassword);
   const temAgenda = Boolean(c.google.icalUrl);
+  const temCliente = Boolean(c.google.clientId && c.google.clientSecret);
+  const conectado = Boolean(c.google.refreshToken);
   return {
     arquivo: FILE,
     typesafe: {
@@ -89,6 +103,12 @@ function status() {
       // O endereço secreto do iCal é longo; mostramos só o começo.
       agendaDica: temAgenda ? `${c.google.icalUrl.slice(0, 46)}…` : '',
       configurado: temGoogle,
+      // OAuth
+      clienteConfigurado: temCliente,
+      clienteDica: temCliente ? mascarar(c.google.clientId) : '',
+      conectado,
+      expiraEm: c.google.accessTokenExpira || '',
+      escopos: c.google.escopos || '',
     },
   };
 }

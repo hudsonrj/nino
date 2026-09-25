@@ -774,6 +774,7 @@ async function loadSettings() {
   el('setAgendaNaoLidos').checked = s.agendaSomenteNaoLidos !== false;
   el('setAgendaCorpo').checked = s.agendaIncluirCorpo !== false;
   await carregarCredenciais();
+  await carregarGoogle();
 
   paintVoiceToggle();
 }
@@ -1563,6 +1564,184 @@ async function testarJev() {
   }
 }
 
+
+/* ---- conexão com o Google (OAuth) ---- */
+
+const googleUI = { status: null, relogio: null };
+
+function googleMsg(texto, cor) {
+  const n = el('googleMsg');
+  if (!n) return;
+  n.textContent = texto || '';
+  n.style.color = cor || '#93a9b8';
+}
+
+function googleAviso(texto) {
+  const n = el('googleAviso');
+  if (!n) return;
+  if (!texto) {
+    n.classList.add('hidden');
+    n.innerHTML = '';
+    return;
+  }
+  n.classList.remove('hidden');
+  n.innerHTML = texto;
+}
+
+function renderGoogle(st) {
+  googleUI.status = st;
+  const e = el('googleEstado');
+  if (!e) return;
+  const linhas = [];
+  if (st.conectado) {
+    linhas.push(
+      `✓ Conectado${st.email ? ` como <b>${esc(st.email)}</b>` : ''}` +
+        (st.funcionando === false ? ' — mas a leitura falhou' : '')
+    );
+  } else if (st.clienteConfigurado) {
+    linhas.push('Cliente OAuth informado — falta autorizar no navegador.');
+  } else {
+    linhas.push('— sem cliente OAuth configurado');
+  }
+  if (st.dicaCliente) linhas.push(`client_id: ${esc(st.dicaCliente)}`);
+  if (st.caminhoEmail) {
+    linhas.push(
+      `E-mail em uso: <b>${esc(st.caminhoEmail === 'oauth' ? 'API do Google' : 'IMAP e SMTP')}</b>`
+    );
+  }
+  if (st.caminhoAgenda) {
+    linhas.push(
+      `Agenda em uso: <b>${esc(st.caminhoAgenda === 'oauth' ? 'API do Google Agenda' : 'endereço secreto do iCal')}</b>`
+    );
+  }
+  e.innerHTML = linhas.map((l) => `<div class="cred-linha">${l}</div>`).join('');
+
+  const b = el('btnGoogleConectar');
+  if (b) b.textContent = st.conectado ? 'Reconectar' : 'Conectar com o Google';
+  const d = el('btnGoogleDesconectar');
+  if (d) d.classList.toggle('hidden', !st.conectado);
+  if (st.erro) googleMsg(st.erro, '#ff9fb0');
+}
+
+async function carregarGoogle() {
+  if (!api.day || !api.day.googleStatus) return;
+  try {
+    renderGoogle(await api.day.googleStatus());
+    // Salvou o client_id sem conectar? Já avisa o que falta.
+    if (googleUI.status && googleUI.status.clienteConfigurado && !googleUI.status.conectado) {
+      // não dispara diagnóstico sozinho: só quando o usuário pedir
+    }
+  } catch (err) {
+    googleMsg(`Não consegui ler o estado do Google: ${err.message}`, '#ff9fb0');
+  }
+}
+
+async function conectarGoogle() {
+  const patch = {};
+  const cid = el('setGoogleClientId').value.trim();
+  const sec = el('setGoogleSecret').value.trim();
+  if (cid) patch.clientId = cid;
+  if (sec) patch.clientSecret = sec;
+
+  googleMsg('Preparando a autorização…');
+  googleAviso('');
+  el('googleDiag').classList.add('hidden');
+  try {
+    const r = await api.day.googleConectar(patch);
+    if (!r.ok) {
+      googleMsg(r.erro, '#ff9fb0');
+      return;
+    }
+    el('setGoogleSecret').value = '';
+    googleAviso(
+      'Autorize no navegador que abriu. Se não abriu, use este endereço:<br>' +
+        `<a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:#48d6e8;word-break:break-all">${esc(r.url)}</a>`
+    );
+    googleMsg('Esperando você autorizar no Google…');
+    esperarGoogle();
+  } catch (err) {
+    googleMsg(`Falhou: ${err.message}`, '#ff9fb0');
+  }
+}
+
+/** Enquanto o navegador está aberto, pergunta ao servidor se já voltou. */
+function esperarGoogle() {
+  if (googleUI.relogio) clearInterval(googleUI.relogio);
+  let tentativas = 0;
+  googleUI.relogio = setInterval(async () => {
+    tentativas += 1;
+    try {
+      const st = await api.day.googleStatus();
+      renderGoogle(st);
+      if (st.conectado) {
+        clearInterval(googleUI.relogio);
+        googleUI.relogio = null;
+        googleAviso('');
+        googleMsg('Conectado! ✓ Já pode usar "Meu dia".', '#4ade80');
+        await carregarCredenciais();
+        await carregarDia();
+        return;
+      }
+    } catch {
+      /* segue tentando */
+    }
+    if (tentativas > 100) {
+      clearInterval(googleUI.relogio);
+      googleUI.relogio = null;
+      googleMsg('Desisti de esperar. Clique em "Conectar" para tentar de novo.');
+    }
+  }, 2000);
+}
+
+async function diagnosticarGoogle() {
+  const caixa = el('googleDiag');
+  googleMsg('Conferindo o projeto no Google…');
+  googleAviso('');
+  try {
+    const r = await api.day.googleDiagnostico();
+    const partes = [];
+    if (r.problemas && r.problemas.length) {
+      for (const p of r.problemas) {
+        partes.push(`<b>✗ ${esc(p.campo)}</b>: ${esc(p.erro)}`);
+        if (p.comoResolver) partes.push(`&nbsp;&nbsp;↳ ${esc(p.comoResolver)}`);
+      }
+    }
+    if (r.itensOk && r.itensOk.length) {
+      for (const i of r.itensOk) partes.push(`✓ ${esc(i)}`);
+    }
+    if (r.avisoSeteDias) partes.push(`<br>⚠ ${esc(r.avisoSeteDias)}`);
+    caixa.classList.remove('hidden');
+    caixa.innerHTML = partes.join('<br>');
+    googleMsg(
+      r.ok ? 'Tudo pronto para conectar.' : 'Encontrei o que está faltando (veja acima).',
+      r.ok ? '#4ade80' : '#f0c674'
+    );
+  } catch (err) {
+    googleMsg(`O diagnóstico falhou: ${err.message}`, '#ff9fb0');
+  }
+}
+
+async function desconectarGoogle(botao) {
+  if (botao.dataset.confirmado !== 'sim') {
+    botao.dataset.confirmado = 'sim';
+    botao.textContent = 'Confirmar desconexão';
+    setTimeout(() => {
+      if (botao.dataset.confirmado === 'sim') {
+        botao.dataset.confirmado = 'nao';
+        botao.textContent = 'Desconectar do Google';
+      }
+    }, 6000);
+    return;
+  }
+  await api.day.googleDesconectar();
+  botao.dataset.confirmado = 'nao';
+  botao.textContent = 'Desconectar do Google';
+  googleMsg('Autorização removida do cofre.', '#93a9b8');
+  googleAviso('');
+  await carregarGoogle();
+  await carregarCredenciais();
+}
+
 function setupDay() {
   if (!api.day) return;
 
@@ -1615,4 +1794,11 @@ function setupDay() {
   if (apagarCred) apagarCred.addEventListener('click', () => apagarCredenciais(apagarCred));
   const testar = el('btnJevTeste');
   if (testar) testar.addEventListener('click', testarJev);
+
+  const conectar = el('btnGoogleConectar');
+  if (conectar) conectar.addEventListener('click', conectarGoogle);
+  const diag = el('btnGoogleDiagnostico');
+  if (diag) diag.addEventListener('click', diagnosticarGoogle);
+  const desc = el('btnGoogleDesconectar');
+  if (desc) desc.addEventListener('click', () => desconectarGoogle(desc));
 }

@@ -246,6 +246,36 @@
         <span>Enviar o corpo dos e-mails ao JEV (triagem bem melhor; sai mais conteúdo)</span>
       </label>
 
+      <div class="sep"><span>Ou conecte com o Google (OAuth)</span></div>
+      <p class="kb-note">
+        Alternativa à senha de app: usa a <b>API do Gmail</b> e a
+        <b>API do Google Agenda</b> direto. É o caminho oficial, permite escrever
+        na agenda no futuro, e dispensa senha de app. Em troca, exige um projeto
+        no Google Cloud e alguns cliques no console — uma vez só.
+        <b>Quando os dois estão configurados, o OAuth tem prioridade.</b>
+      </p>
+
+      <div id="googleEstado" class="cred-estado"></div>
+
+      <label class="field">
+        <span>client_id do projeto</span>
+        <input type="text" id="setGoogleClientId" placeholder="…apps.googleusercontent.com" autocomplete="off" />
+      </label>
+      <label class="field">
+        <span>client_secret do projeto</span>
+        <input type="password" id="setGoogleSecret" placeholder="deixe em branco para manter o atual" autocomplete="off" />
+      </label>
+
+      <div class="settings-foot">
+        <button id="btnGoogleConectar" class="primary-btn">Conectar com o Google</button>
+        <button id="btnGoogleDiagnostico" class="ghost-btn">Diagnóstico</button>
+      </div>
+      <button id="btnGoogleDesconectar" class="ghost-btn danger hidden">Desconectar do Google</button>
+
+      <div id="googleAviso" class="aviso-janela hidden"></div>
+      <div id="googleDiag" class="day-falta hidden"></div>
+      <p class="kb-note" id="googleMsg"></p>
+
       <div class="settings-foot">
         <button id="btnSalvarCredenciais" class="primary-btn">Salvar credenciais</button>
         <button id="btnApagarCredenciais" class="ghost-btn danger">Apagar credenciais</button>

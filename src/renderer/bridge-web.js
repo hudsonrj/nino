@@ -971,6 +971,12 @@
         return res.json();
       },
       testarJev: () => postJson('/api/jev/teste', {}),
+      // Conexão com o Google por OAuth.
+      googleStatus: () => getJson('/api/google/status'),
+      googleConectar: (patch) => postJson('/api/google/conectar', { patch: patch || {} }),
+      googleCancelar: () => postJson('/api/google/cancelar', {}),
+      googleDesconectar: () => postJson('/api/google/desconectar', {}),
+      googleDiagnostico: () => postJson('/api/google/diagnostico', {}),
       // Fluxos com streaming de tokens do modelo local.
       resumo: (opcoes, onMessage) =>
         streamNdjson('/api/agenda/resumo', { ...(opcoes || {}), aprovado: true }, onMessage),

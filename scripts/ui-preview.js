@@ -154,6 +154,25 @@ app.whenReady().then(async () => {
   await settle(page);
   await shoot(win, '8-ajustes-jev');
 
+  /* ------------------ 8b. Ajustes: conectar com o Google ------------- */
+  await page.executeJavaScript(`
+    setView('settings');
+    googleAviso('');
+    document.getElementById('googleDiag').classList.remove('hidden');
+    diagnosticarGoogle();
+    true
+  `);
+  await wait(900);
+  await page.executeJavaScript(`
+    (() => {
+      const alvo = document.getElementById('googleDiag');
+      if (alvo) alvo.scrollIntoView({ block: 'center' });
+      return true;
+    })()
+  `);
+  await settle(page, 700);
+  await shoot(win, '8b-google-oauth');
+
   /* ----------------------- 9. Meu dia: prévia ------------------------ */
   await page.executeJavaScript(`
     el('bubble').classList.add('hidden');
@@ -205,10 +224,12 @@ app.whenReady().then(async () => {
 
   /* ---------------- 12. Meu dia: pilhas de baixo --------------------- */
   await page.executeJavaScript(`
-    const g = [...document.querySelectorAll('.dia-grupo')]
-      .find((x) => /Suspeito/.test(x.querySelector('h4')?.textContent || ''));
-    if (g) g.scrollIntoView({ block: 'end' });
-    true
+    (() => {
+      const grupos = [...document.querySelectorAll('.dia-grupo')];
+      const alvo = grupos.find((x) => /Suspeito/.test((x.querySelector('h4') || {}).textContent || ''));
+      if (alvo) alvo.scrollIntoView({ block: 'end' });
+      return grupos.length;
+    })()
   `);
   await settle(page, 700);
   await shoot(win, '12-dia-suspeito');
