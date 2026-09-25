@@ -35,10 +35,17 @@ function takeSpeech(buf, force) {
  * Monta as mensagens enviadas ao modelo.
  * O contexto recuperado entra no prompt do sistema; o histórico vai enxuto
  * porque em CPU cada token de prompt custa ~40 ms.
+ *
+ * @param {string} systemBase  prompt do sistema já resolvido
+ * @param {object} settings
+ * @param {string} question
+ * @param {string} context     trechos da base ('' quando não há)
+ * @param {Array}  history
+ * @param {string} [image]     imagem em base64, quando for visão
  */
-function buildMessages(settings, question, context, history) {
+function buildMessages(systemBase, settings, question, context, history, image) {
   const stats = kb.stats();
-  let system = settings.systemPrompt;
+  let system = systemBase;
 
   if (context) {
     system +=
@@ -46,7 +53,7 @@ function buildMessages(settings, question, context, history) {
       `${context}\n--- FIM DA BASE ---\n\n` +
       'Use esses trechos para responder. Se eles não contiverem a resposta, ' +
       'diga que não encontrou nos documentos.';
-  } else if (settings.useKnowledgeBase && stats.chunks > 0) {
+  } else if (!image && settings.useKnowledgeBase && stats.chunks > 0) {
     system += '\n\nA base de conhecimento não retornou trechos relevantes para esta pergunta.';
   }
 
@@ -57,11 +64,10 @@ function buildMessages(settings, question, context, history) {
     content: m.content.length > maxChars ? `${m.content.slice(0, maxChars)}…` : m.content,
   }));
 
-  return [
-    { role: 'system', content: system },
-    ...recent,
-    { role: 'user', content: question },
-  ];
+  const userMessage = { role: 'user', content: question };
+  if (image) userMessage.images = [image];
+
+  return [{ role: 'system', content: system }, ...recent, userMessage];
 }
 
 /**
@@ -80,11 +86,17 @@ function createChatSession() {
    * @param {(result:object)=>void} [handlers.onDone]
    * @param {(error:string, meta?:object)=>void} [handlers.onError]
    * @param {()=>void} [handlers.onAborted]
+   * @param {object} [options]
+   * @param {string} [options.image]         imagem base64 — ativa o modo visão
+   * @param {string} [options.systemPrompt]  substitui o prompt do sistema
+   * @param {number} [options.numPredict]
    */
-  async function ask(question, handlers = {}) {
+  async function ask(question, handlers = {}, options = {}) {
     const settings = config.loadSettings();
     const clean = String(question || '').trim();
-    if (!clean) {
+    const image = options.image || null;
+
+    if (!clean && !image) {
       if (handlers.onError) handlers.onError('Mensagem vazia');
       return { ok: false, error: 'Mensagem vazia' };
     }
@@ -99,11 +111,11 @@ function createChatSession() {
       aborter = null;
     }
 
-    // 1. Busca na base de conhecimento.
+    // 1. Busca na base de conhecimento (não faz sentido no modo visão).
     let context = '';
     let sources = [];
     const stats = kb.stats();
-    if (settings.useKnowledgeBase && stats.chunks > 0) {
+    if (!image && settings.useKnowledgeBase && stats.chunks > 0) {
       try {
         const built = await kb.buildContext(clean, {
           topK: settings.topK,
@@ -118,21 +130,23 @@ function createChatSession() {
       }
     }
 
-    // 2. Conversa.
-    const messages = buildMessages(settings, clean, context, history);
+    // 2. Conversa (ou visão).
+    const systemBase = options.systemPrompt || settings.systemPrompt;
+    const messages = buildMessages(systemBase, settings, clean, context, history, image);
     const threads = settings.numThread > 0 ? settings.numThread : config.autoThreads();
+    const model = (image && settings.visionModel) || settings.model;
 
     aborter = new AbortController();
     const signal = aborter.signal;
 
     try {
       const { text, stats: runStats } = await ollama.chatStream({
-        model: settings.model,
+        model,
         messages,
         signal,
         options: {
-          num_predict: settings.maxTokens || 400,
-          temperature: 0.6,
+          num_predict: options.numPredict || settings.maxTokens || 400,
+          temperature: image ? 0.4 : 0.6,
           num_thread: threads,
         },
         onToken: (token, full) => {
@@ -140,7 +154,7 @@ function createChatSession() {
         },
       });
 
-      history.push({ role: 'user', content: clean });
+      history.push({ role: 'user', content: clean || '[imagem]' });
       history.push({ role: 'assistant', content: text });
       if (history.length > MAX_HISTORY * 2) history = history.slice(-MAX_HISTORY * 2);
 

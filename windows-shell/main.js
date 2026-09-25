@@ -20,7 +20,7 @@ const fs = require('fs');
 const http = require('http');
 const { spawn } = require('child_process');
 const {
-  app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell,
+  app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell, desktopCapturer,
 } = require('electron');
 
 /* ------------------------------------------------------------------ */
@@ -376,6 +376,34 @@ function registerIpc() {
     server: SERVER_URL,
     version: app.getVersion(),
   }));
+
+  /**
+   * Captura a tela para o modo visão.
+   * O Electron já entrega a imagem pronta (miniatura), sem precisar de
+   * permissão nem de seletor de janela — diferente do navegador.
+   */
+  ipcMain.handle('screen:capture', async (_e, { maxSide = 1280 } = {}) => {
+    try {
+      const display = screen.getPrimaryDisplay();
+      const { width, height } = display.size;
+      const escala = Math.min(1, maxSide / Math.max(width, height));
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: {
+          width: Math.max(1, Math.round(width * escala)),
+          height: Math.max(1, Math.round(height * escala)),
+        },
+      });
+      if (!sources.length) return { error: 'Nenhuma tela encontrada' };
+      const dataUrl = sources[0].thumbnail.toDataURL();
+      if (!dataUrl || dataUrl.length < 100) return { error: 'Captura vazia' };
+      console.log(`[shell] tela capturada: ${Math.round(dataUrl.length / 1024)} KB`);
+      return { dataUrl };
+    } catch (err) {
+      console.error('[shell] falha ao capturar a tela:', err.message);
+      return { error: err.message };
+    }
+  });
 }
 
 /* ------------------------------------------------------------------ */

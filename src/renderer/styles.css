@@ -272,9 +272,18 @@ body.shell .send-btn {
 /* ============================ COMPOSER ============================== */
 
 .composer {
-  display: flex; align-items: flex-end; gap: 6px;
+  display: flex; align-items: flex-end; gap: 5px;
   margin-top: 9px; flex: 0 0 auto;
 }
+
+/* Os três botões de mídia (microfone, câmera, tela) ficam compactos. */
+.composer .mic-btn { width: 32px; height: 32px; font-size: 14px; border-radius: 10px; }
+.composer .mic-btn.ativo {
+  background: rgba(72, 214, 232, 0.22);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.composer .mic-btn:disabled { opacity: 0.35; cursor: default; }
 
 #input {
   flex: 1 1 auto;

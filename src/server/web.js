@@ -251,6 +251,76 @@ async function handleStt(req, res, url) {
   });
 }
 
+/**
+ * Visão: recebe uma imagem (câmera ou tela) e devolve a análise em streaming.
+ * A imagem fica só na memória e nunca é gravada em disco.
+ */
+async function handleVision(req, res) {
+  const body = await readJson(req);
+  const settings = config.loadSettings();
+
+  if (!settings.visionEnabled) {
+    sendJson(res, 403, { ok: false, error: 'A visão está desligada nos ajustes.' });
+    return;
+  }
+
+  // Aceita tanto base64 puro quanto data URL.
+  const image = String(body.image || '').replace(/^data:image\/[a-zA-Z+]+;base64,/, '');
+  if (!image) {
+    sendJson(res, 400, { ok: false, error: 'Imagem ausente' });
+    return;
+  }
+  // Sanidade: ~20 MB de base64 é imagem demais.
+  if (image.length > 20 * 1024 * 1024) {
+    sendJson(res, 413, { ok: false, error: 'Imagem grande demais' });
+    return;
+  }
+
+  const modo = body.mode === 'screen' ? 'screen' : 'camera';
+  const systemPrompt = modo === 'camera' ? settings.cameraPrompt : settings.screenPrompt;
+  const pergunta =
+    String(body.question || '').trim() ||
+    (modo === 'camera'
+      ? 'O que você está vendo? Como eu pareço estar me sentindo e o que há ao redor?'
+      : 'Explique o que está acontecendo nesta tela e o que eu estou fazendo.');
+
+  res.writeHead(200, {
+    'Content-Type': 'application/x-ndjson; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Accel-Buffering': 'no',
+  });
+
+  let alive = true;
+  req.on('close', () => {
+    alive = false;
+    session.abort();
+  });
+
+  const send = (obj) => {
+    if (!alive) return;
+    try {
+      res.write(`${JSON.stringify(obj)}\n`);
+    } catch {
+      /* cliente foi embora */
+    }
+  };
+
+  send({ type: 'vision-start', mode: modo });
+
+  await session.ask(
+    pergunta,
+    {
+      onToken: (token, full) => send({ type: 'token', token, full }),
+      onDone: (result) => send({ type: 'done', text: result.text, stats: result.stats, sources: [] }),
+      onError: (error) => send({ type: 'error', error }),
+      onAborted: () => send({ type: 'aborted' }),
+    },
+    { image, systemPrompt, numPredict: settings.maxTokens || 400 }
+  );
+
+  res.end();
+}
+
 async function handleTts(req, res) {
   const body = await readJson(req);
   const wav = await tts.synthesize(body.text, {
@@ -328,6 +398,7 @@ async function route(req, res) {
         return sendJson(res, 200, { ok: true });
       }
       if (p === '/api/tts' && method === 'POST') return await handleTts(req, res);
+      if (p === '/api/vision' && method === 'POST') return await handleVision(req, res);
       if (p === '/api/stt' && method === 'POST') return await handleStt(req, res, url);
       if (p === '/api/events' && method === 'GET') {
         res.writeHead(200, {
@@ -390,6 +461,38 @@ async function warmChatModel() {
   }
 }
 
+/**
+ * Carrega o projetor visual do modelo. A primeira imagem custa ~100 s só para
+ * carregar; fazendo isso em segundo plano, a primeira foto do usuário já é
+ * rápida. Usa uma imagem 1x1 para não gastar processamento à toa.
+ */
+const IMAGEM_MINIMA =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+async function warmVisionModel() {
+  const settings = config.loadSettings();
+  if (!settings.visionEnabled) return;
+  const threads = settings.numThread > 0 ? settings.numThread : config.autoThreads();
+  try {
+    if (!(await ollama.ping())) return;
+    console.log('  carregando o modo visão em segundo plano (leva ~1 min)…');
+    await ollama.chatStream({
+      model: settings.visionModel || settings.model,
+      messages: [
+        {
+          role: 'user',
+          content: 'ok',
+          images: [IMAGEM_MINIMA],
+        },
+      ],
+      options: { num_predict: 1, num_thread: threads },
+    });
+    console.log('  modo visão pronto.\n');
+  } catch (err) {
+    console.error('[web] pré-carga da visão falhou:', err.message);
+  }
+}
+
 function localAddresses() {
   const nets = require('os').networkInterfaces();
   const out = [];
@@ -429,6 +532,7 @@ function start() {
 
     // Pré-carga em segundo plano, depois que o servidor já responde.
     setTimeout(warmChatModel, 1200);
+    setTimeout(warmVisionModel, 45000);
   });
 
   server.on('error', (err) => {

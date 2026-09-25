@@ -23,8 +23,26 @@ Regras:
 - Seja breve: de 1 a 4 frases, a não ser que peçam detalhes.
 - Ao usar a BASE DE CONHECIMENTO, diga de qual documento veio ("No arquivo X..."). Se a base não tiver a resposta, avise que não encontrou nos documentos e responda com conhecimento geral.`;
 
-const DEFAULTS = {
-  model: 'qwen3.5:2b',
+/** Prompt usado quando o mascote olha pela câmera. */
+const DEFAULT_CAMERA_PROMPT = `Olhe a imagem da câmera e descreva, em português, de forma natural e calorosa (é falado em voz alta):
+
+1. Quem está aí: quantas pessoas, o que estão fazendo, roupa, postura.
+2. Como a pessoa parece se sentir, pelo rosto e pelo corpo (ex.: cansada, animada, concentrada, tensa, tranquila). Diga que é uma leitura pelo visual, sem certeza.
+3. O ambiente ao redor: onde parece ser, o que há em volta, iluminação, objetos notáveis.
+
+Seja específico e observe detalhes. Não invente: se algo não estiver visível, diga que não dá para ver. De 3 a 5 frases.`;
+
+/** Prompt usado quando o mascote olha a tela do usuário. */
+const DEFAULT_SCREEN_PROMPT = `Olhe esta captura da tela do usuário e explique, em português, o que está acontecendo (é falado em voz alta):
+
+1. Qual programa ou site está aberto e o que está sendo mostrado.
+2. O que o usuário parece estar fazendo naquele momento.
+3. O que chama atenção: erros, mensagens, números, algo fora do lugar.
+4. Se fizer sentido, uma sugestão prática de próximo passo.
+
+Seja direto e útil, sem descrever pixel por pixel. Se não der para entender algum trecho, diga. De 3 a 5 frases.`;
+
+const DEFAULTS = {  model: 'qwen3.5:2b',
   embedModel: 'bge-m3',
   voice: 'pt_BR-faber-medium',
   lengthScale: 1.0,
@@ -48,7 +66,17 @@ const DEFAULTS = {
   // perde muito desempenho; ~metade dos núcleos foi bem melhor na prática.
   numThread: 0,
   maxTokens: 400,
+  // Visão: câmera e captura de tela. Vazio = usa o mesmo modelo da conversa
+  // (os qwen3.5 enxergam). Nada sai da máquina: a imagem vai para o Ollama local.
+  visionModel: '',
+  visionEnabled: true,
+  cameraEnabled: true,
+  screenEnabled: true,
+  // Lado maior da imagem enviada ao modelo. Menor = bem mais rápido na CPU.
+  maxImageSide: 640,
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
+  cameraPrompt: DEFAULT_CAMERA_PROMPT,
+  screenPrompt: DEFAULT_SCREEN_PROMPT,
 };
 
 /** Número de threads de inferência sugerido para esta máquina. */
@@ -103,6 +131,8 @@ module.exports = {
   VOICES_DIR,
   SETTINGS_FILE,
   DEFAULT_SYSTEM_PROMPT,
+  DEFAULT_CAMERA_PROMPT,
+  DEFAULT_SCREEN_PROMPT,
   DEFAULTS,
   autoThreads,
   ensureDirs,

@@ -19,4 +19,6 @@ contextBridge.exposeInMainWorld('__ninoShell', {
   clickThrough: (enabled) => ipcRenderer.invoke('win:clickThrough', { enabled }),
   quit: () => ipcRenderer.invoke('app:quit'),
   info: () => ipcRenderer.invoke('app:info'),
+  // Captura a tela direto pelo processo principal: sem seletor e sem permissão.
+  captureScreen: (maxSide) => ipcRenderer.invoke('screen:capture', { maxSide }),
 });

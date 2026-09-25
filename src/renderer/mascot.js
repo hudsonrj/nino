@@ -172,13 +172,19 @@ function setBusy(busy) {
     // Em CPU a primeira palavra pode levar um tempo; mostrar o tempo
     // decorrido deixa claro que ele está trabalhando.
     const startedAt = Date.now();
+    const rotulo = () => {
+      if (state.waitingOn === 'camera') return 'olhando pela câmera…';
+      if (state.waitingOn === 'screen') return 'olhando sua tela…';
+      if (state.waitingOn === 'kb') return 'procurando nos documentos…';
+      return 'pensando…';
+    };
     const tick = () => {
       if (!state.busy) return;
       const secs = Math.round((Date.now() - startedAt) / 1000);
-      setStatus(state.waitingOn === 'kb' ? `procurando nos documentos… ${secs}s` : `pensando… ${secs}s`, 'busy');
+      setStatus(`${rotulo()} ${secs}s`, 'busy');
     };
     state.busyTimer = setInterval(tick, 1000);
-    el('statusText').textContent = state.waitingOn === 'kb' ? 'procurando nos documentos…' : 'pensando…';
+    el('statusText').textContent = rotulo();
     el('statusDot').className = 'dot busy';
     mascot.classList.add('thinking');
   } else {
@@ -321,6 +327,75 @@ function paintVoiceToggle() {
   const chip = el('btnSpeakToggle');
   chip.textContent = on ? '🔊 voz' : '🔇 mudo';
   chip.classList.toggle('on', on);
+}
+
+/* ------------------------------------------------------------------ */
+/* Visão (câmera e tela)                                               */
+/* ------------------------------------------------------------------ */
+
+async function sendVision(mode) {
+  if (state.busy) {
+    api.chat.abort();
+    return;
+  }
+  if (!state.open) setOpen(true);
+
+  addMessage(
+    'user',
+    mode === 'camera' ? '📷 Olhe para mim e diga o que você vê' : '🖥️ Olhe minha tela e explique'
+  );
+
+  el('sources').classList.add('hidden');
+  state.botText = '';
+  state.botEl = addMessage('bot', '');
+  state.botEl.innerHTML = '<span class="typing"><i></i><i></i><i></i></span>';
+  state.waitingOn = mode;
+  setBusy(true);
+  showBubble(mode === 'camera' ? '📷 Deixa eu te ver…' : '🖥️ Deixa eu olhar sua tela…', 3500);
+
+  // Os tokens chegam pelos mesmos eventos da conversa (chat:token/chat:done).
+  const res = await api.vision.capture(mode);
+  if (res && res.ok === false && !res.aborted && state.botEl) {
+    // chat:error já tratou de mostrar a mensagem; só limpamos o estado.
+    setBusy(false);
+  }
+}
+
+async function setupVision() {
+  const btnCam = el('btnCamera');
+  const btnScr = el('btnScreen');
+  if (!btnCam || !btnScr) return;
+
+  if (!api.vision) {
+    btnCam.classList.add('hidden');
+    btnScr.classList.add('hidden');
+    return;
+  }
+
+  try {
+    const disp = await api.vision.available();
+    if (!disp.enabled) {
+      btnCam.classList.add('hidden');
+      btnScr.classList.add('hidden');
+    } else {
+      if (!disp.camera) btnCam.classList.add('hidden');
+      if (!disp.screen) btnScr.classList.add('hidden');
+    }
+  } catch {
+    /* mantém os botões */
+  }
+
+  btnCam.addEventListener('click', () => sendVision('camera'));
+  btnScr.addEventListener('click', () => sendVision('screen'));
+
+  api.vision.onState((p) => {
+    const ativo = !!(p && p.state === 'analisando');
+    btnCam.classList.toggle('ativo', ativo && p.mode === 'camera');
+    btnScr.classList.toggle('ativo', ativo && p.mode === 'screen');
+    if (ativo) {
+      setStatus(p.mode === 'camera' ? 'olhando pela câmera…' : 'olhando sua tela…', 'busy');
+    }
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -591,6 +666,11 @@ async function loadSettings() {
   await loadOutputDevices();
   el('setTts').checked = !!s.ttsEnabled;
   el('setKb').checked = !!s.useKnowledgeBase;
+  el('setVision').checked = s.visionEnabled !== false;
+  el('setCamera').checked = s.cameraEnabled !== false;
+  el('setScreen').checked = s.screenEnabled !== false;
+  el('setCameraPrompt').value = s.cameraPrompt || '';
+  el('setScreenPrompt').value = s.screenPrompt || '';
   el('setTopK').value = s.topK;
   el('lblTopK').textContent = s.topK;
   el('setThreads').value = s.numThread;
@@ -641,6 +721,11 @@ function setupSettings() {
       lengthScale: Number(el('setSpeed').value),
       ttsEnabled: el('setTts').checked,
       useKnowledgeBase: el('setKb').checked,
+      visionEnabled: el('setVision').checked,
+      cameraEnabled: el('setCamera').checked,
+      screenEnabled: el('setScreen').checked,
+      cameraPrompt: el('setCameraPrompt').value,
+      screenPrompt: el('setScreenPrompt').value,
       topK: Number(el('setTopK').value),
       numThread: Number(el('setThreads').value),
       maxTokens: Number(el('setMaxTok').value),
@@ -702,6 +787,7 @@ async function init() {
   setupComposer();
   setupDragAndClick();
   setupVoice();
+  setupVision();
   setupChatEvents();
   setupKb();
   setupSettings();

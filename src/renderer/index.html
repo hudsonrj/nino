@@ -37,12 +37,14 @@
 
       <form id="composer" class="composer" autocomplete="off">
         <button type="button" id="btnMic" class="mic-btn" title="Falar (voz)">🎤</button>
+        <button type="button" id="btnCamera" class="mic-btn" title="Olhar pela câmera">📷</button>
+        <button type="button" id="btnScreen" class="mic-btn" title="Olhar minha tela">🖥️</button>
         <textarea id="input" rows="1" placeholder="Pergunte alguma coisa…"></textarea>
         <button type="submit" id="btnSend" class="send-btn" title="Enviar">➤</button>
       </form>
 
       <div class="hint">
-        <span>Enter envia · Shift+Enter quebra linha · arraste arquivos aqui</span>
+        <span id="hintText">Enter envia · Shift+Enter quebra linha · arraste arquivos aqui</span>
         <button id="btnSpeakToggle" class="chip" title="Ligar/desligar a voz">🔊 voz</button>
       </div>
     </div>
@@ -100,6 +102,26 @@
       <label class="field check">
         <input type="checkbox" id="setKb" />
         <span>Usar a base de conhecimento</span>
+      </label>
+      <label class="field check">
+        <input type="checkbox" id="setVision" />
+        <span>Visão (câmera e captura de tela)</span>
+      </label>
+      <label class="field check">
+        <input type="checkbox" id="setCamera" />
+        <span>&nbsp;&nbsp;↳ permitir câmera</span>
+      </label>
+      <label class="field check">
+        <input type="checkbox" id="setScreen" />
+        <span>&nbsp;&nbsp;↳ permitir captura de tela</span>
+      </label>
+      <label class="field">
+        <span>Como ele deve olhar pela câmera</span>
+        <textarea id="setCameraPrompt" rows="4"></textarea>
+      </label>
+      <label class="field">
+        <span>Como ele deve explicar a sua tela</span>
+        <textarea id="setScreenPrompt" rows="4"></textarea>
       </label>
       <label class="field range">
         <span>Trechos recuperados <b id="lblTopK">5</b></span>

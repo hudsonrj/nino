@@ -18,6 +18,39 @@ conhecimento ficam na sua máquina. Nada é enviado para a nuvem.
 | 🎤 Escuta | Gravação pelo PulseAudio + transcrição com Whisper local |
 | 📚 Base de conhecimento | PDF, EPUB, DOCX, ODT, TXT, MD, HTML, RTF, CSV… com busca semântica (RAG) |
 | 📎 Arrastar e soltar | Jogue arquivos em cima do mascote para indexá-los |
+| 📷 Visão — câmera | Olha pela câmera: descreve quem está aí, o que a pessoa parece sentir e o ambiente ao redor |
+| 🖥️ Visão — tela | Captura a tela e explica o que está acontecendo, o que você está fazendo e o que chama atenção |
+
+---
+
+## Visão (câmera e tela)
+
+Os modelos `qwen3.5` **enxergam**, então o mascote usa o mesmo modelo da conversa
+para olhar. Dois botões no campo de mensagem:
+
+- **📷** tira uma foto pela câmera e responde: quem está aí, como a pessoa parece
+  se sentir (pelo rosto e postura) e o que há no ambiente.
+- **🖥️** captura a tela e explica o que está acontecendo, o que você está fazendo
+  e o que chama atenção — com uma sugestão de próximo passo quando faz sentido.
+
+A resposta é falada como qualquer outra, frase por frase.
+
+**Privacidade:** a imagem vai apenas para o **Ollama local** e fica **só na
+memória** — nunca é gravada em disco. A câmera é ligada durante a captura e
+**desligada em seguida**. Para desligar tudo, use ⚙️ → *Visão*.
+
+**Custo e tempo:** a primeira imagem de uma sessão carrega o projetor visual
+(~100 s, uma vez só — o servidor já faz isso em segundo plano ao iniciar).
+Depois disso, cada análise leva de **1 a 3 minutos** na CPU. Reduza
+`maxImageSide` (padrão 640) nos ajustes para acelerar.
+
+**Como cada ambiente captura a tela:**
+
+| Ambiente | Como |
+|---|---|
+| Shell Windows | `desktopCapturer` do Electron — direto, sem seletor nem permissão |
+| Navegador | `getDisplayMedia` — o navegador mostra o seletor de janela/tela |
+| Desktop Linux | igual ao navegador |
 
 ---
 

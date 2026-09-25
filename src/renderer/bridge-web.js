@@ -559,6 +559,43 @@
     }
   }
 
+  /** Lê uma resposta NDJSON do servidor e entrega cada mensagem. */
+  async function streamRequest(url, body, signal) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+
+    if (!res.ok) {
+      let detalhe = '';
+      try {
+        detalhe = (await res.json()).error || '';
+      } catch {
+        /* resposta sem JSON */
+      }
+      throw new Error(detalhe || `HTTP ${res.status}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (line) handleLine(line);
+      }
+    }
+    if (buffer.trim()) handleLine(buffer.trim());
+  }
+
   async function startChat(text) {
     if (chatAbort) chatAbort.abort();
     const controller = new AbortController();
@@ -566,36 +603,184 @@
     speechBuffer = '';
 
     try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-        signal: controller.signal,
-      });
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let idx;
-        while ((idx = buffer.indexOf('\n')) >= 0) {
-          const line = buffer.slice(0, idx).trim();
-          buffer = buffer.slice(idx + 1);
-          if (line) handleLine(line);
-        }
-      }
-      if (buffer.trim()) handleLine(buffer.trim());
+      await streamRequest('/api/chat', { text }, controller.signal);
     } catch (err) {
       if (err.name === 'AbortError') emit('chat:aborted', {});
       else emit('chat:error', { error: `Não consegui falar com o servidor: ${err.message}` });
     } finally {
       if (chatAbort === controller) chatAbort = null;
     }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Visão: câmera e tela                                                */
+  /* ------------------------------------------------------------------ */
+
+  let cameraStream = null;
+
+  /** Reduz a imagem para o lado máximo configurado e devolve um data URL. */
+  function frameToDataUrl(source, sourceWidth, sourceHeight, maxSide) {
+    const lado = Math.max(sourceWidth, sourceHeight) || 1;
+    const escala = Math.min(1, (maxSide || 640) / lado);
+    const w = Math.max(1, Math.round(sourceWidth * escala));
+    const h = Math.max(1, Math.round(sourceHeight * escala));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(source, 0, 0, w, h);
+    return canvas.toDataURL('image/jpeg', 0.82);
+  }
+
+  function stopCamera() {
+    if (cameraStream) {
+      for (const track of cameraStream.getTracks()) track.stop();
+      cameraStream = null;
+    }
+  }
+
+  /**
+   * Tira uma foto pela câmera.
+   * A câmera é ligada só durante a captura e desligada em seguida.
+   */
+  async function captureCamera(maxSide) {
+    try {
+      if (!cameraStream) {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+          audio: false,
+        });
+      }
+    } catch (err) {
+      const msg =
+        err.name === 'NotAllowedError'
+          ? 'Permissão de câmera negada. Autorize a câmera e tente de novo.'
+          : `Não consegui abrir a câmera: ${err.message}`;
+      throw new Error(msg);
+    }
+
+    const video = document.createElement('video');
+    video.srcObject = cameraStream;
+    video.muted = true;
+    video.playsInline = true;
+
+    try {
+      await video.play();
+      // Espera o primeiro quadro de verdade.
+      if (!video.videoWidth) {
+        await new Promise((resolve) => {
+          const pronto = () => resolve();
+          video.addEventListener('loadeddata', pronto, { once: true });
+          setTimeout(pronto, 2000);
+        });
+      }
+      if (!video.videoWidth) throw new Error('A câmera não entregou imagem');
+      return frameToDataUrl(video, video.videoWidth, video.videoHeight, maxSide);
+    } finally {
+      video.srcObject = null;
+      stopCamera();
+    }
+  }
+
+  /** Tira uma foto da tela. */
+  async function captureScreen(maxSide) {
+    // 1. No shell do Windows o processo principal captura direto, sem pedir
+    //    permissão nem mostrar seletor.
+    if (shell && typeof shell.captureScreen === 'function') {
+      const res = await shell.captureScreen(maxSide);
+      if (!res || !res.dataUrl) throw new Error(res && res.error ? res.error : 'captura falhou');
+      return res.dataUrl;
+    }
+
+    // 2. No navegador é preciso getDisplayMedia (o navegador mostra o seletor).
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    } catch (err) {
+      if (err.name === 'NotAllowedError') throw new Error('Captura de tela cancelada.');
+      throw new Error(`Não consegui capturar a tela: ${err.message}`);
+    }
+
+    const video = document.createElement('video');
+    video.srcObject = stream;
+    video.muted = true;
+    video.playsInline = true;
+
+    try {
+      await video.play();
+      if (!video.videoWidth) {
+        await new Promise((resolve) => {
+          video.addEventListener('loadeddata', resolve, { once: true });
+          setTimeout(resolve, 2000);
+        });
+      }
+      if (!video.videoWidth) throw new Error('A tela não entregou imagem');
+      return frameToDataUrl(video, video.videoWidth, video.videoHeight, maxSide);
+    } finally {
+      video.srcObject = null;
+      for (const track of stream.getTracks()) track.stop();
+    }
+  }
+
+  /**
+   * Captura e manda para o modelo de visão.
+   * Usa os mesmos eventos da conversa (chat:token/chat:done/chat:error), então
+   * a interface não precisa saber que veio de uma imagem.
+   *
+   * @param {'camera'|'screen'} mode
+   * @param {{question?:string, keepCamera?:boolean}} [opts]
+   */
+  async function capture(mode, opts = {}) {
+    if (chatAbort) chatAbort.abort();
+    const controller = new AbortController();
+    chatAbort = controller;
+    speechBuffer = '';
+
+    const settings = await getJson('/api/settings').catch(() => ({}));
+    const maxSide = settings.maxImageSide || 640;
+
+    try {
+      const image = mode === 'camera' ? await captureCamera(maxSide) : await captureScreen(maxSide);
+      emit('vision:state', { state: 'analisando', mode, bytes: image.length });
+
+      await streamRequest(
+        '/api/vision',
+        { image, mode, question: opts.question || '' },
+        controller.signal
+      );
+      emit('vision:state', { state: 'idle', mode });
+      return { ok: true };
+    } catch (err) {
+      emit('vision:state', { state: 'idle', mode });
+      if (err.name === 'AbortError') {
+        emit('chat:aborted', {});
+        return { ok: false, aborted: true };
+      }
+      emit('chat:error', { error: err.message });
+      return { ok: false, error: err.message };
+    } finally {
+      if (chatAbort === controller) chatAbort = null;
+    }
+  }
+
+  /** A visão está disponível neste ambiente? */
+  async function available() {
+    const temCamera = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+    const temTelaNoShell = !!(shell && typeof shell.captureScreen === 'function');
+    const temTelaNoNavegador = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+    let config = {};
+    try {
+      config = await getJson('/api/settings');
+    } catch {
+      /* usa os padrões abaixo */
+    }
+    return {
+      camera: temCamera && config.cameraEnabled !== false,
+      screen: (temTelaNoShell || temTelaNoNavegador) && config.screenEnabled !== false,
+      enabled: config.visionEnabled !== false,
+      model: config.visionModel || config.model,
+    };
   }
 
   /* ------------------------------------------------------------------ */
@@ -691,8 +876,7 @@
       addViaDialog: async () => {
         const files = await pickFiles();
         return uploadFiles(files);
-      },
-      addPaths: () => ({ ok: false, error: 'No navegador, use o seletor ou arraste arquivos' }),
+      },      addPaths: () => ({ ok: false, error: 'No navegador, use o seletor ou arraste arquivos' }),
       list: () => getJson('/api/kb'),
       remove: (id) => postJson('/api/kb/remove', { id }),
       clear: () => postJson('/api/kb/clear'),
@@ -700,6 +884,13 @@
       search: async (query) => ({ hits: [], query }),
       onProgress: (fn) => on('kb:progress', fn),
       onChanged: (fn) => on('kb:changed', fn),
+    },
+
+    vision: {
+      capture,
+      available,
+      stopCamera,
+      onState: (fn) => on('vision:state', fn),
     },
 
     settings: {
