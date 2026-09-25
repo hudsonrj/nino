@@ -1391,6 +1391,7 @@ async function resumoFalado() {
   if (dia.ocupado) return;
   dia.ocupado = true;
   el('btnDayResumo').disabled = true;
+  el('btnDayAprovar').disabled = true;
   el('dayPreview').classList.add('hidden');
   el('dayResultado').innerHTML = '';
   diaStatus('O JEV está classificando; depois o modelo local escreve…', 'trabalhando');
@@ -1438,6 +1439,7 @@ async function resumoFalado() {
   } finally {
     dia.ocupado = false;
     el('btnDayResumo').disabled = false;
+    el('btnDayAprovar').disabled = false;
   }
 }
 
@@ -1793,7 +1795,10 @@ function setupDay() {
     el('dayResultado').innerHTML = '';
     carregarDia();
   });
-  el('btnDayAprovar').addEventListener('click', aprovarETriar);
+  // Aprovar leva ao resumo FALADO (que já faz a triagem por dentro).
+  // "Só classificar" para na lista, para quem não quer esperar o modelo local.
+  el('btnDayAprovar').addEventListener('click', resumoFalado);
+  el('btnDaySoTriar').addEventListener('click', aprovarETriar);
   el('btnDayCancelar').addEventListener('click', () => {
     el('dayPreview').classList.add('hidden');
     diaStatus('Envio ao JEV cancelado. Nada saiu da sua máquina.');
