@@ -271,6 +271,14 @@ contextBridge.exposeInMainWorld('nino', {
   day: {
     info: () => ({
       ok: true,
+      // Conectado por OAuth: nada falta. O aviso de "falta configurar" não
+      // pode aparecer só porque os campos do caminho antigo estão vazios.
+      pronto: true,
+      pendencias: [],
+      caminhoEmail: 'oauth',
+      caminhoAgenda: 'oauth',
+      rotuloEmail: 'API do Google (OAuth)',
+      rotuloAgenda: 'API do Google Agenda',
       credenciais: MOCK_CREDENCIAIS,
       fuso: 'America/Sao_Paulo',
       estatisticas: { chamadas: 12, tokensEntrada: 31240, tokensSaida: 480, custoUSD: 0.001312 },

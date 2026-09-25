@@ -1083,37 +1083,31 @@ function diaStatus(texto, classe) {
   n.className = `day-status${classe ? ` ${classe}` : ''}`;
 }
 
-/** Mostra o que falta configurar, com o motivo exato. */
+/**
+ * Mostra o que falta configurar — se faltar algo.
+ *
+ * A lista vem PRONTA do servidor, que conhece os dois caminhos de conexão
+ * (OAuth e senha de app). A primeira versão repetia a regra aqui e exigia os
+ * campos do caminho antigo, então acusava "falta configurar" com o OAuth já
+ * funcionando perfeitamente.
+ */
 function renderFalta(info) {
   const caixa = el('dayFalta');
-  const faltas = [];
-  const c = (info && info.credenciais) || {};
-  if (!c.typesafe || !c.typesafe.configurado) {
-    faltas.push(
-      'A <b>chave da TypeSafe</b> (o JEV) não está configurada. Crie uma em ' +
-        'console.typesafe.ai/keys e cole em Ajustes.'
-    );
-  }
-  if (!c.google || !c.google.configurado) {
-    faltas.push(
-      'O <b>Gmail</b> não está configurado. Informe seu e-mail e uma ' +
-        '<b>senha de app</b> em Ajustes.'
-    );
-  }
-  if (!c.google || !c.google.agenda) {
-    faltas.push(
-      'A <b>agenda</b> não está configurada. Cole o endereço secreto do iCal ' +
-        'em Ajustes.'
-    );
-  }
-  if (!faltas.length) {
+  const pendencias = (info && info.pendencias) || [];
+  if (!pendencias.length) {
     caixa.classList.add('hidden');
     caixa.innerHTML = '';
     return;
   }
   caixa.classList.remove('hidden');
   caixa.innerHTML =
-    'Falta configurar:<br>' + faltas.map((f) => `• ${f}`).join('<br>');
+    'Falta configurar:<br>' +
+    pendencias
+      .map((p) => {
+        const linha = `• <b>${esc(p.mensagem)}</b>`;
+        return p.comoResolver ? `${linha}<br>&nbsp;&nbsp;↳ ${esc(p.comoResolver)}` : linha;
+      })
+      .join('<br>');
 }
 
 async function carregarDia() {
@@ -1124,15 +1118,16 @@ async function carregarDia() {
   try {
     dia.info = await api.day.info();
     renderFalta(dia.info);
-    if (!dia.info.credenciais.typesafe.configurado) {
-      diaStatus('Falta a chave do JEV para eu poder triar seu dia.');
-    } else if (dia.triagem) {
+    if (dia.triagem) {
       // já temos uma triagem: mantém o resultado na tela
     } else {
       const est = dia.info.estatisticas;
+      const onde = [dia.info.rotuloEmail, dia.info.rotuloAgenda].filter(Boolean).join(' + ');
       diaStatus(
-        `Pronto. Configurei ${est.chamadas} chamada(s) ao JEV até agora, ` +
-          `US$ ${Number(est.custoUSD).toFixed(6)}.`
+        dia.info.pronto
+          ? `Tudo pronto${onde ? ` — ${onde}` : ''}. ` +
+            `${est.chamadas} chamada(s) ao JEV até agora, US$ ${Number(est.custoUSD).toFixed(6)}.`
+          : 'Falta configurar algo — veja o aviso acima.'
       );
     }
   } catch (err) {

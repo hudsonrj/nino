@@ -899,8 +899,53 @@ async function handleAgendaUltima(res) {
 
 /** Informações de fuso e limites, para a tela de ajustes. */
 async function handleAgendaInfo(res) {
+  const settings = config.loadSettings();
+  const caminhoEmail = mailbox.caminhoDeEmail();
+  const caminhoAgenda = mailbox.caminhoDeAgenda();
+
+  // Quem decide o que falta é o servidor, que conhece os DOIS caminhos
+  // (OAuth e senha de app). A interface só mostra o resultado — antes ela
+  // repetia a regra e acusava falta de configuração com o OAuth funcionando.
+  const pendencias = [];
+  if (!caminhoEmail) {
+    pendencias.push({
+      campo: 'email',
+      mensagem: 'O e-mail não está conectado.',
+      comoResolver:
+        'Conecte com o Google, ou informe seu e-mail do Gmail e uma senha de app.',
+    });
+  }
+  if (!caminhoAgenda) {
+    pendencias.push({
+      campo: 'agenda',
+      mensagem: 'A agenda não está conectada.',
+      comoResolver:
+        'Conecte com o Google, ou cole o endereço secreto do iCal da sua agenda.',
+    });
+  }
+  if (!settings.jevEnabled) {
+    pendencias.push({
+      campo: 'jev',
+      mensagem: 'O JEV está desligado, então eu não classifico nada.',
+      comoResolver: 'Ligue a chave "Usar o JEV para triar meu e-mail e minha agenda".',
+    });
+  } else if (!credentials.chaveTypesafe()) {
+    pendencias.push({
+      campo: 'chave',
+      mensagem: 'Falta a chave da TypeSafe (o JEV).',
+      comoResolver: 'Crie uma em console.typesafe.ai/keys e cole em Ajustes.',
+    });
+  }
+
   sendJson(res, 200, {
     ok: true,
+    pronto: pendencias.length === 0,
+    pendencias,
+    caminhoEmail,
+    caminhoAgenda,
+    rotuloEmail: caminhoEmail ? mailbox.mostrarCaminho(caminhoEmail) : '',
+    rotuloAgenda:
+      caminhoAgenda === 'oauth' ? 'API do Google Agenda' : caminhoAgenda === 'ical' ? 'endereço secreto do iCal' : '',
     credenciais: credentials.status(),
     fuso: process.env.NINO_FUSO || 'America/Sao_Paulo',
     estatisticas: jev.estatisticas(),

@@ -177,6 +177,7 @@ app.whenReady().then(async () => {
   await page.executeJavaScript(`
     el('bubble').classList.add('hidden');
     setView('day');
+    carregarDia();
     diaStatus('Li 5 mensagem(ns) e 3 compromisso(s). Confira o que sairia da sua máquina e aprove.');
     true
   `);
