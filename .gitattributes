@@ -1,0 +1,2 @@
+data/models/whisper/blobs/42/429ffc84492c1122da005d7274fc397bf142fe12066eb7e4612dc25c579db2ea filter=lfs diff=lfs merge=lfs -text
+vendor/voices/*.onnx filter=lfs diff=lfs merge=lfs -text

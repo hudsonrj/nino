@@ -1,8 +1,17 @@
 node_modules/
-data/
-vendor/piper/
-vendor/voices/
+
+# Ambiente Python desta máquina: o shebang aponta para o caminho local
+# e o setup recria na outra máquina.
 vendor/sttenv/
+
+# Livros ainda protegidos por direito autoral, e o índice que guarda o
+# texto deles. Ficam só nesta máquina.
+data/uploads/
+data/kb/
+
+# Travas temporárias do cache do Hugging Face.
+data/models/whisper/.locks/
+data/models/whisper/**/*.lock
 
 # Segredos. O cofre fica em ~/.config/nino/credenciais.json, fora do
 # repositório; estas linhas são só uma rede de segurança para quem apontar
